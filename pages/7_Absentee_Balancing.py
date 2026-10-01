@@ -27,7 +27,7 @@ if missing:
 
 ob_name = st.selectbox("Operation Breakdown", options=list(obs.keys()))
 ob = obs[ob_name]
-ob_lines = sorted({r["line"] for r in ob["rows"]})
+ob_lines = st.session_state["lines"]
 lines = st.multiselect("Lines", options=ob_lines, default=ob_lines)
 
 all_skill_matrix = skill_matrix_dict()
@@ -55,7 +55,7 @@ if present is not None:
     employee_line = {e: line for e, line in all_employee_line.items() if e in present}
 
     if st.button("Run Absentee Balancing", type="primary", disabled=len(lines) < 2):
-        rows_by_line = {line: [r for r in ob["rows"] if r["line"] == line] for line in lines}
+        rows_by_line = {line: ob["rows"] for line in lines}
         with st.spinner("Balancing across lines with present employees only..."):
             calcs_by_line, units = run_multi_line(
                 lines, rows_by_line, float(ob["shift_time"]), float(ob["target"]), float(ob["plan_efficiency"]),

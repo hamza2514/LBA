@@ -26,8 +26,7 @@ with c2:
 with c3:
     plan_efficiency = st.number_input("Plan Efficiency", min_value=0.01, max_value=1.0, value=float(ob["plan_efficiency"]))
 
-line_filter = st.selectbox("Line", options=["(all)"] + sorted({r["line"] for r in ob["rows"]}))
-rows = ob["rows"] if line_filter == "(all)" else [r for r in ob["rows"] if r["line"] == line_filter]
+rows = ob["rows"]
 
 calcs = compute_ob_table(rows, shift_time, target, plan_efficiency)
 

@@ -27,7 +27,7 @@ mode = st.radio("Mode", options=["Single Line", "Multiple Lines"], horizontal=Tr
 
 ob_name = st.selectbox("Operation Breakdown", options=list(obs.keys()))
 ob = obs[ob_name]
-ob_lines = sorted({r["line"] for r in ob["rows"]})
+ob_lines = st.session_state["lines"]
 
 skill_matrix = skill_matrix_dict()
 employee_line = employee_line_dict()
@@ -45,7 +45,7 @@ st.caption("These can differ from the OB's original defaults — a specific line
 if mode == "Single Line":
     line = st.selectbox("Line", options=ob_lines)
     if st.button("Run Layout Balancing", type="primary"):
-        rows = [r for r in ob["rows"] if r["line"] == line]
+        rows = ob["rows"]
         with st.spinner("Balancing..."):
             calcs, units = run_single_line(line, rows, shift_time, target, plan_efficiency, skill_matrix, employee_line)
         st.session_state["lb_result"] = (calcs, units)
@@ -53,7 +53,7 @@ if mode == "Single Line":
 else:
     lines = st.multiselect("Lines", options=ob_lines, default=ob_lines)
     if st.button("Run Layout Balancing", type="primary", disabled=len(lines) < 2):
-        rows_by_line = {line: [r for r in ob["rows"] if r["line"] == line] for line in lines}
+        rows_by_line = {line: ob["rows"] for line in lines}
         with st.spinner("Balancing across lines..."):
             calcs_by_line, units = run_multi_line(lines, rows_by_line, shift_time, target, plan_efficiency, skill_matrix, employee_line)
         st.session_state["lb_result"] = (calcs_by_line, units)

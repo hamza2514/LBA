@@ -15,78 +15,85 @@ tab_ob, tab_emp, tab_skill = st.tabs(["Operation Breakdown", "Employees", "Skill
 with tab_ob:
     st.subheader("Operation Breakdown")
     st.caption(
-        "Upload Operation, Machine Type, SAM, and Line per operation. Everything else "
-        "(Skill Group, Shift Target, Manpower, Head Allocated) is derived automatically."
+        "Upload Operation, Machine Type, and SAM/SMV. Skill Group, Shift Target, Manpower, and "
+        "Head Allocated are derived automatically. Line is NOT set here — you'll pick which line(s) "
+        "to run this OB on when you go to Layout Balancing or Absentee Balancing."
     )
-    file = st.file_uploader("Upload Operation Breakdown (.xlsx or .csv)", type=["xlsx", "csv"], key="ob_upload")
+    file = st.file_uploader("Upload Operation Breakdown (.xlsx, .csv, or .pdf)", type=["xlsx", "csv", "pdf"], key="ob_upload")
 
     if file:
-        raw = read_any(file)
-        st.write("Preview:")
-        st.dataframe(raw.head(10), width='stretch')
+        try:
+            raw = read_any(file)
+        except ValueError as e:
+            st.error(str(e))
+            raw = None
 
-        mapping = column_mapper(
-            raw,
-            required_fields={
-                "operation": "Operation Description",
-                "machine_type": "Machine Type",
-                "sam": "SAM / SMV",
-                "line": "Line",
-            },
-            key_prefix="ob",
-        )
+        if raw is not None:
+            st.write("Preview:")
+            st.dataframe(raw.head(10), width='stretch')
 
-        st.divider()
-        st.caption("These three are used to calculate the OB table. You'll be asked again (possibly with different values) during Layout Balancing.")
-        c1, c2, c3 = st.columns(3)
-        with c1:
-            shift_time = st.number_input("Shift Time (minutes)", min_value=1.0, value=480.0, key="ob_shift_time")
-        with c2:
-            target = st.number_input("Target (units/shift)", min_value=1.0, value=1200.0, key="ob_target")
-        with c3:
-            plan_efficiency = st.number_input("Plan Efficiency", min_value=0.01, max_value=1.0, value=0.85, key="ob_eff")
+            mapping = column_mapper(
+                raw,
+                required_fields={
+                    "operation": "Operation Description",
+                    "machine_type": "Machine Type",
+                    "sam": "SAM / SMV",
+                },
+                key_prefix="ob",
+            )
 
-        ob_name = st.text_input("Name this Operation Breakdown (so you can pick it later)", placeholder="e.g. Style ABC123 - Basic 5-Pocket")
+            st.divider()
+            st.caption("These three are used to calculate the OB table. You'll be asked again (possibly with different values) during Layout Balancing.")
+            c1, c2, c3 = st.columns(3)
+            with c1:
+                shift_time = st.number_input("Shift Time (minutes)", min_value=1.0, value=480.0, key="ob_shift_time")
+            with c2:
+                target = st.number_input("Target (units/shift)", min_value=1.0, value=1200.0, key="ob_target")
+            with c3:
+                plan_efficiency = st.number_input("Plan Efficiency", min_value=0.01, max_value=1.0, value=0.85, key="ob_eff")
 
-        if st.button("Confirm & Load Operation Breakdown", type="primary", disabled=not ob_name):
-            mapped = apply_mapping(raw, mapping)
-            mapped["sam"] = mapped["sam"].astype(float)
-            mapped["line"] = mapped["line"].astype(str)
-            ensure_lines_registered(mapped["line"].unique().tolist())
+            ob_name = st.text_input("Name this Operation Breakdown (so you can pick it later)", placeholder="e.g. Style ABC123 - Basic 5-Pocket")
 
-            rows = []
-            new_count = 0
-            progress = st.progress(0.0, text="Matching operations to skill groups...")
-            total = len(mapped)
-            for i, (_, r) in enumerate(mapped.iterrows()):
-                sg, created, new_row, score = get_or_create_skill_group(
-                    r["operation"], r["machine_type"], r["sam"], st.session_state["extra_taxonomy"]
-                )
-                if created:
-                    st.session_state["extra_taxonomy"].append(new_row)
-                    new_count += 1
-                rows.append(
-                    {
-                        "operation": r["operation"],
-                        "machine_type": r["machine_type"],
-                        "sam": r["sam"],
-                        "line": r["line"],
-                        "skill_group": sg,
-                    }
-                )
-                progress.progress((i + 1) / total, text=f"Matching operations... {i+1}/{total}")
-            progress.empty()
+            if st.button("Confirm & Load Operation Breakdown", type="primary", disabled=not ob_name):
+                mapped = apply_mapping(raw, mapping)
+                mapped["sam"] = pd.to_numeric(mapped["sam"], errors="coerce").astype(float)
+                bad_sam = mapped["sam"].isna().sum()
+                mapped = mapped.dropna(subset=["sam"])
 
-            st.session_state["obs"][ob_name] = {
-                "rows": rows,
-                "shift_time": shift_time,
-                "target": target,
-                "plan_efficiency": plan_efficiency,
-            }
-            msg = f"Loaded '{ob_name}' — {len(rows)} operations across {mapped['line'].nunique()} line(s)."
-            if new_count:
-                msg += f" {new_count} operation(s) didn't match the reference taxonomy, so new Skill Group IDs were created for them."
-            st.success(msg)
+                rows = []
+                new_count = 0
+                progress = st.progress(0.0, text="Matching operations to skill groups...")
+                total = len(mapped)
+                for i, (_, r) in enumerate(mapped.iterrows()):
+                    sg, created, new_row, score = get_or_create_skill_group(
+                        r["operation"], r["machine_type"], r["sam"], st.session_state["extra_taxonomy"]
+                    )
+                    if created:
+                        st.session_state["extra_taxonomy"].append(new_row)
+                        new_count += 1
+                    rows.append(
+                        {
+                            "operation": r["operation"],
+                            "machine_type": r["machine_type"],
+                            "sam": r["sam"],
+                            "skill_group": sg,
+                        }
+                    )
+                    progress.progress((i + 1) / total if total else 1.0, text=f"Matching operations... {i+1}/{total}")
+                progress.empty()
+
+                st.session_state["obs"][ob_name] = {
+                    "rows": rows,
+                    "shift_time": shift_time,
+                    "target": target,
+                    "plan_efficiency": plan_efficiency,
+                }
+                msg = f"Loaded '{ob_name}' — {len(rows)} operations."
+                if bad_sam:
+                    msg += f" {bad_sam} row(s) had a non-numeric SAM and were skipped — worth checking the source file."
+                if new_count:
+                    msg += f" {new_count} operation(s) didn't match the reference taxonomy, so new Skill Group IDs were created for them."
+                st.success(msg)
 
     if st.session_state["obs"]:
         st.divider()
