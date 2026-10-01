@@ -17,11 +17,50 @@ import streamlit as st
 from rapidfuzz import fuzz
 
 
+def read_pdf_tables(uploaded_file) -> pd.DataFrame:
+    """
+    Best-effort extraction of tabular data from a PDF Operation Breakdown.
+    Works for text-based PDFs with real table structure (most exported/
+    printed OBs). Does NOT do OCR — a scanned/image-only PDF will yield no
+    tables, and the caller should tell the user clearly rather than silently
+    returning nothing.
+    """
+    import pdfplumber
+
+    all_rows: list[list] = []
+    header: list | None = None
+    with pdfplumber.open(uploaded_file) as pdf:
+        for page in pdf.pages:
+            for table in page.extract_tables():
+                if not table:
+                    continue
+                if header is None:
+                    header = table[0]
+                    body = table[1:]
+                else:
+                    # if this table repeats the same header (common on multi-page
+                    # OBs), drop it; otherwise treat the whole table as data rows
+                    body = table[1:] if table[0] == header else table
+                all_rows.extend(body)
+
+    if header is None:
+        raise ValueError(
+            "No tables could be found in this PDF. This only works for text-based "
+            "PDFs with real table structure — not scanned/image-only pages."
+        )
+
+    df = pd.DataFrame(all_rows, columns=header)
+    df = df.dropna(how="all")
+    return df
+
+
 def read_any(uploaded_file) -> pd.DataFrame:
-    """Reads an uploaded .xlsx or .csv into a DataFrame."""
+    """Reads an uploaded .xlsx, .csv, or .pdf into a DataFrame."""
     name = uploaded_file.name.lower()
     if name.endswith(".csv"):
         return pd.read_csv(uploaded_file)
+    if name.endswith(".pdf"):
+        return read_pdf_tables(uploaded_file)
     return pd.read_excel(uploaded_file)
 
 
