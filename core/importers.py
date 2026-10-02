@@ -17,19 +17,65 @@ import streamlit as st
 from rapidfuzz import fuzz
 
 
+def _looks_like_sno_table(table: list[list]) -> bool:
+    """Heuristic for 'Style Bulletin'-style OB reports: real operation rows
+    start with a plain integer Sr. No and have enough columns to be a real
+    data table (not a 2-column totals scrap or a garbled header block)."""
+    if not table or len(table[0] or []) < 5:
+        return False
+    first_cells = [(row[0] or "").strip() for row in table if row]
+    numeric = [c for c in first_cells if c.replace(".", "", 1).isdigit()]
+    return len(numeric) >= max(2, len(first_cells) // 2)
+
+
+def _extract_numbered_operation_rows(pdf) -> pd.DataFrame | None:
+    """
+    Handles multi-column ERP-style OB reports (e.g. Artistic Milliners'
+    Style Bulletin) that have NO header row at all — data starts directly
+    at row 1. Column order in these reports, confirmed against a real
+    sample: Sr.No, Operation Description, Machine Type, A.S.C.T(sec), SAM,
+    Target/Hr, Target/Day, then several repeated manpower-scenario columns
+    we don't need (the app derives its own Head Allocated).
+    Skips junk tables (garbled summary headers, stray totals).
+    """
+    rows = []
+    for page in pdf.pages:
+        for table in page.extract_tables():
+            if not _looks_like_sno_table(table):
+                continue
+            for r in table:
+                cell0 = (r[0] or "").strip()
+                if not cell0.replace(".", "", 1).isdigit():
+                    continue  # skip stray "Sub Total:" / section-header rows mixed into a table
+                operation = (r[1] or "").strip() if len(r) > 1 else ""
+                machine = (r[2] or "").strip() if len(r) > 2 else ""
+                sam = (r[4] or "").strip() if len(r) > 4 else ""
+                if not operation:
+                    continue
+                rows.append({"Sr.No": cell0, "Operation Description": operation, "Machine Type": machine, "SAM": sam})
+
+    if len(rows) < 2:
+        return None
+    return pd.DataFrame(rows)
+
+
 def read_pdf_tables(uploaded_file) -> pd.DataFrame:
     """
     Best-effort extraction of tabular data from a PDF Operation Breakdown.
-    Works for text-based PDFs with real table structure (most exported/
-    printed OBs). Does NOT do OCR — a scanned/image-only PDF will yield no
-    tables, and the caller should tell the user clearly rather than silently
-    returning nothing.
+    Tries the position-aware "numbered operation rows" parser first (handles
+    real multi-section ERP-style bulletins with no header row), then falls
+    back to simple header-based table extraction for plainer bordered-table
+    PDFs. Does NOT do OCR — a scanned/image-only PDF will yield nothing.
     """
     import pdfplumber
 
-    all_rows: list[list] = []
-    header: list | None = None
     with pdfplumber.open(uploaded_file) as pdf:
+        structured = _extract_numbered_operation_rows(pdf)
+        if structured is not None:
+            return structured
+
+        all_rows: list[list] = []
+        header: list | None = None
         for page in pdf.pages:
             for table in page.extract_tables():
                 if not table:
@@ -38,8 +84,6 @@ def read_pdf_tables(uploaded_file) -> pd.DataFrame:
                     header = table[0]
                     body = table[1:]
                 else:
-                    # if this table repeats the same header (common on multi-page
-                    # OBs), drop it; otherwise treat the whole table as data rows
                     body = table[1:] if table[0] == header else table
                 all_rows.extend(body)
 
@@ -106,18 +150,30 @@ def apply_mapping(df: pd.DataFrame, mapping: dict[str, str]) -> pd.DataFrame:
     return out
 
 
-def wide_skill_matrix_to_long(df: pd.DataFrame, employee_col: str) -> pd.DataFrame:
+def wide_skill_matrix_to_long(df: pd.DataFrame, employee_col: str, exclude_cols: list[str] | None = None) -> pd.DataFrame:
     """
     Converts a wide skill matrix (employees as rows, one column per
     operation/skill, any non-empty cell = qualified) into long format:
-    one row per (employee, skill_group).
+    one row per (employee, skill_text). exclude_cols lets the caller drop
+    non-skill columns (like Employee Name) that would otherwise be
+    misread as bogus skill columns.
     """
-    skill_cols = [c for c in df.columns if c != employee_col]
+    exclude = set(exclude_cols or [])
+    skill_cols = [c for c in df.columns if c != employee_col and c not in exclude]
     records = []
     for _, row in df.iterrows():
         emp = row[employee_col]
         for col in skill_cols:
             val = row[col]
             if pd.notna(val) and str(val).strip() not in ("", "0"):
-                records.append({"employee": emp, "skill_group": col})
+                records.append({"employee": emp, "skill_text": col})
     return pd.DataFrame(records)
+
+
+def long_skill_file_to_pairs(df: pd.DataFrame, employee_col: str, skill_col: str) -> pd.DataFrame:
+    """Already-long skill files (one row per employee-skill pair, e.g.
+    Employee_Code + Skill columns) — just rename to the standard shape."""
+    out = df[[employee_col, skill_col]].copy()
+    out.columns = ["employee", "skill_text"]
+    out = out.dropna(subset=["employee", "skill_text"])
+    return out

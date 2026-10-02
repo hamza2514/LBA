@@ -39,6 +39,7 @@ class Chunk:
     machine_type: str
     minutes: float
     kind: str  # "under_utilized" | "overflow"
+    sam: float = 0.0  # lets downstream code convert minutes back to a piece-count target
 
 
 @dataclass
@@ -66,10 +67,10 @@ def identify_chunks(line: str, calcs: list[OperationCalc], shift_time: float) ->
     for c in calcs:
         capacity = c.head_allocated * shift_time
         if c.head_allocated == 1 and c.work_minutes <= UNDER_UTILIZED_THRESHOLD * shift_time:
-            chunks.append(Chunk(line, c.operation, c.skill_group, c.machine_type, c.work_minutes, "under_utilized"))
+            chunks.append(Chunk(line, c.operation, c.skill_group, c.machine_type, c.work_minutes, "under_utilized", sam=c.sam))
         elif c.work_minutes > capacity:
             overflow = c.work_minutes - capacity
-            chunks.append(Chunk(line, c.operation, c.skill_group, c.machine_type, overflow, "overflow"))
+            chunks.append(Chunk(line, c.operation, c.skill_group, c.machine_type, overflow, "overflow", sam=c.sam))
     return chunks
 
 

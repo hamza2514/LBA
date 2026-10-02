@@ -23,6 +23,8 @@ class OperationCalc:
     manpower_eff: float
     head_allocated: int
     work_minutes: float  # internal only — never shown in the OB view
+    target: float = 0.0
+    target_per_employee: float = 0.0
 
 
 def head_allocated_rule(manpower_eff: float) -> int:
@@ -57,6 +59,7 @@ def compute_operation(
     manpower_eff = target / shift_target_eff if shift_target_eff else 0.0
     head = head_allocated_rule(manpower_eff)
     work_minutes = target * sam
+    target_per_employee = target / head if head else 0.0
 
     return OperationCalc(
         operation=operation,
@@ -69,6 +72,8 @@ def compute_operation(
         manpower_eff=manpower_eff,
         head_allocated=head,
         work_minutes=work_minutes,
+        target=target,
+        target_per_employee=target_per_employee,
     )
 
 

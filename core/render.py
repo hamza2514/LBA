@@ -1,6 +1,7 @@
-"""Turns a list of AssignedUnit into a color-coded, per-operation table for
-display. Every merged bin (color_key != 'unmerged') gets its own color;
-different combos never share a color; unmerged rows stay plain."""
+"""Turns a list of AssignedUnit into the requested results table:
+Sr#, Line, Operation, Machine Type, SAM, Employee Code, Employee Name,
+Target — with merged/pooled operations color-coded so it's visible at a
+glance which operations share one person."""
 from __future__ import annotations
 
 import pandas as pd
@@ -11,26 +12,41 @@ PALETTE = [
 ]
 
 
-def units_to_table(units) -> tuple[pd.DataFrame, dict]:
+def units_to_table(units, op_lookup: dict, employee_names: dict | None = None) -> tuple[pd.DataFrame, dict]:
+    """
+    op_lookup: {operation_name: (machine_type, sam)} — built from the
+    computed OperationCalc list, since AssignedUnit rows only carry
+    operation/skill_group/minutes/target, not machine/SAM.
+    employee_names: {employee_id: employee_name}
+    """
+    employee_names = employee_names or {}
+
     color_keys = [u.color_key for u in units if u.color_key != "unmerged"]
     unique_keys = list(dict.fromkeys(color_keys))
     color_map = {k: PALETTE[i % len(PALETTE)] for i, k in enumerate(unique_keys)}
 
     rows = []
     for u in units:
-        for (line, operation, skill_group, minutes) in u.operations:
+        for (line, operation, skill_group, minutes, target) in u.operations:
+            machine_type, sam = op_lookup.get(operation, ("", None))
+            emp_code = u.employee or ""
+            emp_name = employee_names.get(u.employee, "") if u.employee else "⚠️ UNSTAFFED"
             rows.append(
                 {
                     "Line": line,
                     "Operation": operation,
-                    "Skill Group": skill_group,
-                    "Minutes": round(minutes, 1),
-                    "Assigned To": u.employee or "⚠️ UNSTAFFED",
+                    "Machine Type": machine_type,
+                    "SAM": round(sam, 4) if sam is not None else "",
+                    "Employee Code": emp_code,
+                    "Employee Name": emp_name,
+                    "Target": round(target) if target else 0,
                     "Cross-Line": "Yes" if u.cross_line else "",
                     "_color_key": u.color_key,
                 }
             )
     df = pd.DataFrame(rows)
+    if not df.empty:
+        df.insert(0, "Sr#", range(1, len(df) + 1))
     return df, color_map
 
 
@@ -40,6 +56,5 @@ def style_table(df: pd.DataFrame, color_map: dict):
         color = color_map.get(key)
         return [f"background-color: {color}" if color else "" for _ in row]
 
-    display_df = df.drop(columns=["_color_key"])
     styled = df.style.apply(highlight, axis=1).hide(axis="columns", subset=["_color_key"])
     return styled

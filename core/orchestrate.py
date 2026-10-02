@@ -8,17 +8,8 @@ balancing runs the app offers:
 from __future__ import annotations
 
 from core.formulas import compute_ob_table, OperationCalc
-from core.pooling import identify_chunks, pack_same_line, pack_multi_line, Chunk
+from core.pooling import identify_chunks, pack_same_line, pack_multi_line
 from core.assignment import assign_bins, assign_standalone, AssignedUnit
-
-
-def _bundled_operation_keys(units: list[AssignedUnit]) -> set:
-    keys = set()
-    for u in units:
-        if u.color_key != "unmerged":
-            for (line, op, sg, minutes) in u.operations:
-                keys.add((line, op))
-    return keys
 
 
 def run_single_line(
@@ -36,15 +27,12 @@ def run_single_line(
     units = assign_bins(bins, skill_matrix, employee_line)
 
     used = {u.employee for u in units if u.employee}
-    bundled_ops = {(line, c.operation) for b in bins for c in b.chunks}
-    pooled_op_names = {op for (ln, op) in bundled_ops}
+    pooled_op_names = {c.operation for b in bins for c in b.chunks}
 
     for c in calcs:
         if c.operation in pooled_op_names:
             continue
-        units.append(
-            assign_standalone(line, c.operation, c.skill_group, c.work_minutes, skill_matrix, employee_line, used)
-        )
+        units.extend(assign_standalone(line, c, skill_matrix, employee_line, used))
 
     return calcs, units
 
@@ -75,8 +63,6 @@ def run_multi_line(
         for c in calcs:
             if (line, c.operation) in bundled:
                 continue
-            units.append(
-                assign_standalone(line, c.operation, c.skill_group, c.work_minutes, skill_matrix, employee_line, used)
-            )
+            units.extend(assign_standalone(line, c, skill_matrix, employee_line, used))
 
     return calcs_by_line, units

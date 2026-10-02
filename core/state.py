@@ -36,6 +36,14 @@ def employee_line_dict() -> dict:
     return {str(r["employee_id"]): str(r["line"]) for _, r in edf.iterrows()}
 
 
+def employee_names_dict() -> dict:
+    """{employee_id: employee_name} built from the employee list."""
+    edf = st.session_state.get("employees_df")
+    if edf is None:
+        return {}
+    return {str(r["employee_id"]): str(r["employee_name"]) for _, r in edf.iterrows()}
+
+
 def add_line(name: str):
     name = name.strip()
     if name and name not in st.session_state["lines"]:
