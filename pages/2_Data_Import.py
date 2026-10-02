@@ -2,7 +2,7 @@ import streamlit as st
 import pandas as pd
 
 from core.state import init_state, ensure_lines_registered
-from core.importers import read_any, column_mapper, apply_mapping, wide_skill_matrix_to_long
+from core.importers import read_any, column_mapper, apply_mapping, wide_skill_matrix_to_long, long_skill_file_to_pairs
 from core.matching import get_or_create_skill_group
 
 st.set_page_config(page_title="Data Import", page_icon="📥", layout="wide")
@@ -59,6 +59,9 @@ with tab_ob:
                 mapped["sam"] = pd.to_numeric(mapped["sam"], errors="coerce").astype(float)
                 bad_sam = mapped["sam"].isna().sum()
                 mapped = mapped.dropna(subset=["sam"])
+                zero_sam = (mapped["sam"] <= 0).sum()
+                mapped = mapped[mapped["sam"] > 0]
+                bad_sam += zero_sam
 
                 rows = []
                 new_count = 0
@@ -138,9 +141,8 @@ with tab_emp:
 with tab_skill:
     st.subheader("Skill Matrix")
     st.caption(
-        "Wide format expected: one row per employee, one column per operation/skill group, "
-        "any non-empty cell means that employee is qualified. Columns should line up with the "
-        "Skill Group IDs used in your Operation Breakdown(s) for best results."
+        "Two formats supported. Operation/skill names are matched against the same reference "
+        "taxonomy as your Operation Breakdown — so skill names don't need to match OB wording exactly."
     )
     file = st.file_uploader("Upload Skill Matrix (.xlsx or .csv)", type=["xlsx", "csv"], key="skill_upload")
     if file:
@@ -148,15 +150,80 @@ with tab_skill:
         st.write("Preview:")
         st.dataframe(raw.head(10), width='stretch')
 
-        emp_col = st.selectbox("Which column identifies the employee?", options=list(raw.columns), key="skill_emp_col")
-        if st.button("Confirm & Load Skill Matrix", type="primary"):
-            long_df = wide_skill_matrix_to_long(raw, emp_col)
-            long_df["employee"] = long_df["employee"].astype(str)
-            st.session_state["skill_matrix_long"] = long_df
-            st.success(f"Loaded {len(long_df)} employee-skill pairs from {raw[emp_col].nunique()} employees.")
+        file_format = st.radio(
+            "Which format is this file?",
+            options=["wide", "long"],
+            format_func=lambda f: {
+                "wide": "Wide — one row per employee, one column per operation (tick marks / ratings)",
+                "long": "Long — one row per employee-skill pair (employee code repeats for each skill)",
+            }[f],
+            key="skill_format",
+        )
+
+        pairs = None
+        if file_format == "wide":
+            c1, c2 = st.columns(2)
+            with c1:
+                emp_col = st.selectbox("Which column is the Employee ID?", options=list(raw.columns), key="skill_emp_col")
+            with c2:
+                other_cols = [c for c in raw.columns if c != emp_col]
+                non_skill_hints = ("name", "count", "total", "department", "designation", "line", "zone")
+                exclude_cols = st.multiselect(
+                    "Any other columns to EXCLUDE (e.g. Employee Name, a trailing count/total column) — everything else is treated as a skill/operation column",
+                    options=other_cols,
+                    default=[c for c in other_cols if any(h in str(c).lower() for h in non_skill_hints)],
+                    key="skill_exclude_cols",
+                )
+            if st.button("Preview conversion", key="skill_wide_preview"):
+                pairs = wide_skill_matrix_to_long(raw, emp_col, exclude_cols)
+                st.session_state["skill_pairs_preview"] = pairs
+        else:
+            c1, c2 = st.columns(2)
+            with c1:
+                emp_col = st.selectbox("Which column is the Employee ID?", options=list(raw.columns), key="skill_emp_col_long")
+            with c2:
+                skill_col = st.selectbox("Which column is the Skill/Operation name?", options=[c for c in raw.columns if c != emp_col], key="skill_skill_col_long")
+            if st.button("Preview conversion", key="skill_long_preview"):
+                pairs = long_skill_file_to_pairs(raw, emp_col, skill_col)
+                st.session_state["skill_pairs_preview"] = pairs
+
+        pairs = st.session_state.get("skill_pairs_preview")
+        if pairs is not None:
+            st.caption(f"{len(pairs)} employee-skill pairs found, {pairs['skill_text'].nunique()} distinct skill names. Matching these against the taxonomy:")
+            if st.button("Confirm & Load Skill Matrix", type="primary"):
+                cache: dict = {}
+                new_count = 0
+                resolved_sg = []
+                progress = st.progress(0.0, text="Matching skill names to skill groups...")
+                total = len(pairs)
+                for i, (_, r) in enumerate(pairs.iterrows()):
+                    text = r["skill_text"]
+                    if text not in cache:
+                        sg, created, new_row, score = get_or_create_skill_group(
+                            text, None, None, st.session_state["extra_taxonomy"]
+                        )
+                        if created:
+                            st.session_state["extra_taxonomy"].append(new_row)
+                            new_count += 1
+                        cache[text] = sg
+                    resolved_sg.append(cache[text])
+                    if i % 25 == 0 or i == total - 1:
+                        progress.progress((i + 1) / total if total else 1.0, text=f"Matching... {i+1}/{total}")
+                progress.empty()
+
+                long_df = pairs.copy()
+                long_df["skill_group"] = resolved_sg
+                long_df["employee"] = long_df["employee"].astype(str)
+                st.session_state["skill_matrix_long"] = long_df
+                msg = f"Loaded {len(long_df)} employee-skill pairs from {long_df['employee'].nunique()} employees, {long_df['skill_text'].nunique()} distinct skill names."
+                if new_count:
+                    msg += f" {new_count} skill name(s) didn't match the reference taxonomy, so new Skill Group IDs were created for them."
+                st.success(msg)
+                del st.session_state["skill_pairs_preview"]
 
     current = st.session_state.get("skill_matrix_long")
     if current is not None:
         st.divider()
         st.caption("Currently loaded (long format):")
         st.dataframe(current, width='stretch')
+

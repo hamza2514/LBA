@@ -1,6 +1,6 @@
 import streamlit as st
 
-from core.state import init_state, skill_matrix_dict, employee_line_dict
+from core.state import init_state, skill_matrix_dict, employee_line_dict, employee_names_dict
 from core.orchestrate import run_single_line, run_multi_line
 from core.render import units_to_table, style_table
 
@@ -31,6 +31,7 @@ ob_lines = st.session_state["lines"]
 
 skill_matrix = skill_matrix_dict()
 employee_line = employee_line_dict()
+employee_names = employee_names_dict()
 
 c1, c2, c3 = st.columns(3)
 with c1:
@@ -48,7 +49,8 @@ if mode == "Single Line":
         rows = ob["rows"]
         with st.spinner("Balancing..."):
             calcs, units = run_single_line(line, rows, shift_time, target, plan_efficiency, skill_matrix, employee_line)
-        st.session_state["lb_result"] = (calcs, units)
+        op_lookup = {c.operation: (c.machine_type, c.sam) for c in calcs}
+        st.session_state["lb_result"] = (units, op_lookup)
 
 else:
     lines = st.multiselect("Lines", options=ob_lines, default=ob_lines)
@@ -56,13 +58,16 @@ else:
         rows_by_line = {line: ob["rows"] for line in lines}
         with st.spinner("Balancing across lines..."):
             calcs_by_line, units = run_multi_line(lines, rows_by_line, shift_time, target, plan_efficiency, skill_matrix, employee_line)
-        st.session_state["lb_result"] = (calcs_by_line, units)
+        op_lookup = {}
+        for calcs in calcs_by_line.values():
+            op_lookup.update({c.operation: (c.machine_type, c.sam) for c in calcs})
+        st.session_state["lb_result"] = (units, op_lookup)
     if len(lines) < 2:
         st.caption("Pick at least two lines for multi-line balancing.")
 
 result = st.session_state.get("lb_result")
 if result:
-    _, units = result
+    units, op_lookup = result
     st.divider()
 
     unstaffed = [u for u in units if u.understaffed]
@@ -75,7 +80,7 @@ if result:
     cross = [u for u in units if u.cross_line]
     st.caption(f"{len(merged)} operator(s) assigned to more than one operation. {len(cross)} working across lines.")
 
-    df, color_map = units_to_table(units)
+    df, color_map = units_to_table(units, op_lookup, employee_names)
     st.dataframe(style_table(df, color_map), width='stretch', hide_index=True)
 
     csv = df.drop(columns=["_color_key"]).to_csv(index=False).encode("utf-8")

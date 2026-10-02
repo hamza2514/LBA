@@ -1,6 +1,6 @@
 import streamlit as st
 
-from core.state import init_state, skill_matrix_dict, employee_line_dict
+from core.state import init_state, skill_matrix_dict, employee_line_dict, employee_names_dict
 from core.orchestrate import run_multi_line
 from core.render import units_to_table, style_table
 from core.importers import read_any
@@ -32,6 +32,7 @@ lines = st.multiselect("Lines", options=ob_lines, default=ob_lines)
 
 all_skill_matrix = skill_matrix_dict()
 all_employee_line = employee_line_dict()
+employee_names = employee_names_dict()
 all_employees = sorted(all_employee_line.keys())
 
 st.subheader("Who's present today?")
@@ -61,13 +62,16 @@ if present is not None:
                 lines, rows_by_line, float(ob["shift_time"]), float(ob["target"]), float(ob["plan_efficiency"]),
                 skill_matrix, employee_line,
             )
-        st.session_state["ab_result"] = (calcs_by_line, units)
+        op_lookup = {}
+        for calcs in calcs_by_line.values():
+            op_lookup.update({c.operation: (c.machine_type, c.sam) for c in calcs})
+        st.session_state["ab_result"] = (units, op_lookup)
     if len(lines) < 2:
         st.caption("Pick at least two lines.")
 
 result = st.session_state.get("ab_result")
 if result:
-    _, units = result
+    units, op_lookup = result
     st.divider()
 
     unstaffed = [u for u in units if u.understaffed]
@@ -80,7 +84,7 @@ if result:
     cross = [u for u in units if u.cross_line]
     st.caption(f"{len(merged)} operator(s) assigned to more than one operation. {len(cross)} working across lines.")
 
-    df, color_map = units_to_table(units)
+    df, color_map = units_to_table(units, op_lookup, employee_names)
     st.dataframe(style_table(df, color_map), width='stretch', hide_index=True)
 
     csv = df.drop(columns=["_color_key"]).to_csv(index=False).encode("utf-8")
