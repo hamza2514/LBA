@@ -17,14 +17,36 @@ def init_state():
             st.session_state[k] = v
 
 
-def skill_matrix_dict() -> dict:
-    """{employee: set(skill_group)} built from the long-format upload."""
+def skill_matrix_dict(ob_rows: list | None = None) -> dict:
+    """
+    {employee: set(skill_group)} built from the long-format upload.
+
+    If ob_rows is given (the OB actually being balanced), each skill-matrix
+    entry is re-resolved against THAT OB's own operations first — exact/
+    near-identical text always reuses the OB's own Skill Group ID, which is
+    the single biggest source of staffing gaps when the OB and Skill Matrix
+    were matched independently (no shared machine-type context for the
+    skill-matrix side). Falls back to the stored resolution from import time
+    for any skill not mentioned in this particular OB.
+    """
+    from core.matching import match_against_rows
+
     sdf = st.session_state.get("skill_matrix_long")
     if sdf is None:
         return {}
+
+    cache: dict = {}
     out: dict = {}
     for _, r in sdf.iterrows():
-        out.setdefault(str(r["employee"]), set()).add(str(r["skill_group"]))
+        text = r.get("skill_text")
+        stored_sg = str(r["skill_group"])
+        sg = stored_sg
+        if ob_rows and text:
+            if text not in cache:
+                matched_sg, score = match_against_rows(text, ob_rows)
+                cache[text] = matched_sg or stored_sg
+            sg = cache[text]
+        out.setdefault(str(r["employee"]), set()).add(sg)
     return out
 
 

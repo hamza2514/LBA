@@ -254,6 +254,37 @@ def match_operation_dynamic(
     return match_operation(description, machine_type, threshold)
 
 
+def match_against_rows(description: str, rows: list[dict], threshold: int = MATCH_THRESHOLD):
+    """
+    Matches free text against a specific list of {"operation"/"description",
+    "skill_group", ...} dicts — used to resolve a Skill Matrix entry against
+    the OPERATIONS OF THE OB ACTUALLY BEING BALANCED first, before falling
+    back to the general reference taxonomy. This guarantees identical (or
+    near-identical) text always resolves to the exact same Skill Group ID
+    the OB itself is using, regardless of how OB vs Skill Matrix were
+    independently matched at import time.
+    Returns (skill_group_id, score) or (None, 0).
+    """
+    if not rows or not clean(description):
+        return None, 0
+    norm_q = normalize(description)
+    squash_q = squashed(description)
+    best_sg, best_score = None, 0
+    for r in rows:
+        desc = clean(r.get("operation") or r.get("description") or "")
+        if not desc:
+            continue
+        score = max(
+            fuzz.token_sort_ratio(norm_q, normalize(desc)),
+            fuzz.ratio(squash_q, squashed(desc)),
+        )
+        if score > best_score:
+            best_sg, best_score = r.get("skill_group"), score
+    if best_sg and best_score >= threshold:
+        return best_sg, best_score
+    return None, 0
+
+
 def get_or_create_skill_group(
     description: str,
     machine_type: str,
