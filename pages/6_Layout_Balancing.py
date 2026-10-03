@@ -2,7 +2,7 @@ import streamlit as st
 
 from core.state import init_state, skill_matrix_dict, employee_line_dict, employee_names_dict
 from core.orchestrate import run_single_line, run_multi_line
-from core.render import units_to_table, style_table
+from core.render import units_to_table, style_table, render_manual_assignment_ui
 
 st.set_page_config(page_title="Layout Balancing", page_icon="⚖️", layout="wide")
 init_state()
@@ -29,7 +29,7 @@ ob_name = st.selectbox("Operation Breakdown", options=list(obs.keys()))
 ob = obs[ob_name]
 ob_lines = st.session_state["lines"]
 
-skill_matrix = skill_matrix_dict()
+skill_matrix = skill_matrix_dict(ob_rows=ob["rows"])
 employee_line = employee_line_dict()
 employee_names = employee_names_dict()
 
@@ -51,6 +51,7 @@ if mode == "Single Line":
             calcs, units = run_single_line(line, rows, shift_time, target, plan_efficiency, skill_matrix, employee_line)
         op_lookup = {c.operation: (c.machine_type, c.sam) for c in calcs}
         st.session_state["lb_result"] = (units, op_lookup)
+        st.session_state["lb_overrides"] = {}
 
 else:
     lines = st.multiselect("Lines", options=ob_lines, default=ob_lines)
@@ -62,6 +63,7 @@ else:
         for calcs in calcs_by_line.values():
             op_lookup.update({c.operation: (c.machine_type, c.sam) for c in calcs})
         st.session_state["lb_result"] = (units, op_lookup)
+        st.session_state["lb_overrides"] = {}
     if len(lines) < 2:
         st.caption("Pick at least two lines for multi-line balancing.")
 
@@ -70,18 +72,22 @@ if result:
     units, op_lookup = result
     st.divider()
 
-    unstaffed = [u for u in units if u.understaffed]
-    if unstaffed:
-        st.error(f"{len(unstaffed)} assignment(s) have no qualified employee available.")
-    else:
-        st.success("Every operation is staffed.")
-
+    overrides = st.session_state.get("lb_overrides", {})
     merged = [u for u in units if u.color_key != "unmerged"]
     cross = [u for u in units if u.cross_line]
+
+    df, color_map = units_to_table(units, op_lookup, employee_names, manual_overrides=overrides)
+
+    still_unstaffed = (df["Employee Code"] == "").sum()
+    if still_unstaffed:
+        st.error(f"{still_unstaffed} assignment(s) still have no employee assigned.")
+    else:
+        st.success("Every operation is staffed.")
     st.caption(f"{len(merged)} operator(s) assigned to more than one operation. {len(cross)} working across lines.")
 
-    df, color_map = units_to_table(units, op_lookup, employee_names)
     st.dataframe(style_table(df, color_map), width='stretch', hide_index=True)
 
-    csv = df.drop(columns=["_color_key"]).to_csv(index=False).encode("utf-8")
+    csv = df.drop(columns=["_color_key", "_row_index", "_unit_id"]).to_csv(index=False).encode("utf-8")
     st.download_button("Download result (CSV)", csv, file_name="layout_balancing_result.csv", mime="text/csv")
+
+    render_manual_assignment_ui(df, st.session_state.get("employees_df"), "lb_overrides")

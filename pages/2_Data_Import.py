@@ -214,8 +214,23 @@ with tab_skill:
                 long_df = pairs.copy()
                 long_df["skill_group"] = resolved_sg
                 long_df["employee"] = long_df["employee"].astype(str)
-                st.session_state["skill_matrix_long"] = long_df
-                msg = f"Loaded {len(long_df)} employee-skill pairs from {long_df['employee'].nunique()} employees, {long_df['skill_text'].nunique()} distinct skill names."
+
+                existing = st.session_state.get("skill_matrix_long")
+                if existing is not None and len(existing):
+                    combined = pd.concat([existing, long_df], ignore_index=True)
+                    before = len(combined)
+                    combined = combined.drop_duplicates(subset=["employee", "skill_text"], keep="last")
+                    merged_note = f" Merged with your existing skill matrix ({len(existing)} prior pairs); {before - len(combined)} duplicate (employee, skill) pairs were kept once."
+                else:
+                    combined = long_df
+                    merged_note = ""
+
+                st.session_state["skill_matrix_long"] = combined
+                msg = (
+                    f"Loaded {len(long_df)} employee-skill pairs from this file "
+                    f"({long_df['employee'].nunique()} employees, {long_df['skill_text'].nunique()} distinct skill names)."
+                    f"{merged_note} Skill matrix now has {len(combined)} total pairs across {combined['employee'].nunique()} employees."
+                )
                 if new_count:
                     msg += f" {new_count} skill name(s) didn't match the reference taxonomy, so new Skill Group IDs were created for them."
                 st.success(msg)
@@ -224,6 +239,12 @@ with tab_skill:
     current = st.session_state.get("skill_matrix_long")
     if current is not None:
         st.divider()
-        st.caption("Currently loaded (long format):")
+        c1, c2 = st.columns([5, 1])
+        with c1:
+            st.caption(f"Currently loaded (long format) — {len(current)} pairs, {current['employee'].nunique()} employees. New uploads ADD to this; they don't replace it.")
+        with c2:
+            if st.button("Clear all", key="clear_skill_matrix"):
+                st.session_state["skill_matrix_long"] = None
+                st.rerun()
         st.dataframe(current, width='stretch')
 
