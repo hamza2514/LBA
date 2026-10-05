@@ -63,6 +63,10 @@ def record_taxonomy_extra(new_row: dict):
     db.add_taxonomy_extra(new_row)
 
 
+def record_taxonomy_extra_bulk(new_rows: list[dict]):
+    db.add_taxonomy_extra_bulk(new_rows)
+
+
 # ------------------------------------------------------------- Roles layer
 def list_roles() -> dict:
     """{role_name: [machine_type, ...]} — a Role grants qualification for
