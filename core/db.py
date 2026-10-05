@@ -16,6 +16,7 @@ import json
 import streamlit as st
 from sqlalchemy import create_engine, text
 from sqlalchemy.engine import Engine
+from psycopg2.extras import execute_values
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS lines (
@@ -142,14 +143,21 @@ def save_ob(name: str, shift_time: float, target: float, plan_efficiency: float,
             {"name": name, "st": shift_time, "tg": target, "eff": plan_efficiency},
         )
         conn.execute(text("DELETE FROM ob_rows WHERE ob_name = :name"), {"name": name})
-        for r in rows:
-            conn.execute(
-                text(
-                    "INSERT INTO ob_rows (ob_name, operation, machine_type, sam, skill_group) "
-                    "VALUES (:ob, :op, :mt, :sam, :sg)"
-                ),
-                {"ob": name, "op": r["operation"], "mt": r.get("machine_type"), "sam": r["sam"], "sg": r["skill_group"]},
+
+    if rows:
+        raw = get_engine().raw_connection()
+        try:
+            cur = raw.cursor()
+            values = [(name, r["operation"], r.get("machine_type"), r["sam"], r["skill_group"]) for r in rows]
+            execute_values(
+                cur,
+                "INSERT INTO ob_rows (ob_name, operation, machine_type, sam, skill_group) VALUES %s",
+                values,
+                page_size=500,
             )
+            raw.commit()
+        finally:
+            raw.close()
 
 
 def get_ob(name: str) -> dict | None:
@@ -186,15 +194,22 @@ def list_employees():
 
 
 def upsert_employees(df):
-    with get_engine().begin() as conn:
-        for _, r in df.iterrows():
-            conn.execute(
-                text(
-                    "INSERT INTO employees (employee_id, employee_name, line) VALUES (:id, :name, :line) "
-                    "ON CONFLICT (employee_id) DO UPDATE SET employee_name=:name, line=:line"
-                ),
-                {"id": str(r["employee_id"]), "name": r["employee_name"], "line": str(r["line"])},
-            )
+    if df.empty:
+        return
+    raw = get_engine().raw_connection()
+    try:
+        cur = raw.cursor()
+        values = [(str(r["employee_id"]), r["employee_name"], str(r["line"])) for _, r in df.iterrows()]
+        execute_values(
+            cur,
+            "INSERT INTO employees (employee_id, employee_name, line) VALUES %s "
+            "ON CONFLICT (employee_id) DO UPDATE SET employee_name = EXCLUDED.employee_name, line = EXCLUDED.line",
+            values,
+            page_size=500,
+        )
+        raw.commit()
+    finally:
+        raw.close()
 
 
 # --------------------------------------------------------------- Skill Matrix
@@ -206,16 +221,34 @@ def list_skill_pairs():
 
 
 def add_skill_pairs(df):
-    with get_engine().begin() as conn:
-        for _, r in df.iterrows():
-            conn.execute(
-                text(
-                    "INSERT INTO skill_matrix (employee, skill_text, machine_type, skill_group) "
-                    "VALUES (:emp, :txt, :mt, :sg) "
-                    "ON CONFLICT (employee, skill_text) DO UPDATE SET machine_type=:mt, skill_group=:sg"
-                ),
-                {"emp": r["employee"], "txt": r["skill_text"], "mt": r.get("machine_type"), "sg": r["skill_group"]},
-            )
+    """
+    Bulk upsert via execute_values — ONE network round trip per ~500 rows
+    instead of one per row. This is the single biggest speed fix: a skill
+    matrix with hundreds of employees x several skills each can easily be
+    1,000+ pairs, and the old row-by-row loop meant 1,000+ individual
+    round trips to the (remote, Neon) database — easily minutes of wall
+    time even though each statement itself is fast.
+    """
+    if df.empty:
+        return
+    raw = get_engine().raw_connection()
+    try:
+        cur = raw.cursor()
+        values = [
+            (r["employee"], r["skill_text"], r.get("machine_type"), r["skill_group"])
+            for _, r in df.iterrows()
+        ]
+        execute_values(
+            cur,
+            "INSERT INTO skill_matrix (employee, skill_text, machine_type, skill_group) VALUES %s "
+            "ON CONFLICT (employee, skill_text) DO UPDATE SET "
+            "machine_type = EXCLUDED.machine_type, skill_group = EXCLUDED.skill_group",
+            values,
+            page_size=500,
+        )
+        raw.commit()
+    finally:
+        raw.close()
 
 
 def clear_skill_matrix():
@@ -233,6 +266,31 @@ def list_taxonomy_extra() -> list[dict]:
         {"skill_group_id": r[0], "operation_description": r[1], "machine_type": r[2], "sam": r[3]}
         for r in rows
     ]
+
+
+def add_taxonomy_extra_bulk(new_rows: list[dict]):
+    """Same fix as add_skill_pairs — batch newly auto-created skill groups
+    into one round trip instead of one insert per new group found during
+    an import."""
+    if not new_rows:
+        return
+    raw = get_engine().raw_connection()
+    try:
+        cur = raw.cursor()
+        values = [
+            (r["skill_group_id"], r["operation_description"], r.get("machine_type"), r.get("sam"))
+            for r in new_rows
+        ]
+        execute_values(
+            cur,
+            "INSERT INTO taxonomy_extra (skill_group_id, operation_description, machine_type, sam) "
+            "VALUES %s ON CONFLICT DO NOTHING",
+            values,
+            page_size=500,
+        )
+        raw.commit()
+    finally:
+        raw.close()
 
 
 def add_taxonomy_extra(new_row: dict):
