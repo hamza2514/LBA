@@ -1,7 +1,7 @@
 import streamlit as st
 import pandas as pd
 
-from core.state import init_state, ensure_lines_registered, extra_taxonomy_list, record_taxonomy_extra, save_ob, list_obs, get_ob
+from core.state import init_state, ensure_lines_registered, extra_taxonomy_list, record_taxonomy_extra_bulk, save_ob, list_obs, get_ob
 from core.importers import read_any, column_mapper, apply_mapping, wide_skill_matrix_to_long, long_skill_file_to_pairs
 from core.matching import get_or_create_skill_group
 import core.db as db
@@ -67,7 +67,7 @@ with tab_ob:
 
                 extra_taxonomy = extra_taxonomy_list()
                 rows = []
-                new_count = 0
+                newly_created = []  # batched to ONE db write at the end, not one per new group
                 progress = st.progress(0.0, text="Matching operations to skill groups...")
                 total = len(mapped)
                 for i, (_, r) in enumerate(mapped.iterrows()):
@@ -76,23 +76,23 @@ with tab_ob:
                     )
                     if created:
                         extra_taxonomy.append(new_row)
-                        record_taxonomy_extra({
+                        newly_created.append({
                             "skill_group_id": new_row["skill_group_id"],
                             "operation_description": new_row["operation_description"],
                             "machine_type": new_row["machine_type"],
                             "sam": new_row["sam"],
                         })
-                        new_count += 1
                     rows.append({"operation": r["operation"], "machine_type": r["machine_type"], "sam": r["sam"], "skill_group": sg})
                     progress.progress((i + 1) / total if total else 1.0, text=f"Matching operations... {i+1}/{total}")
                 progress.empty()
 
+                record_taxonomy_extra_bulk(newly_created)
                 save_ob(ob_name, shift_time, target, plan_efficiency, rows)
                 msg = f"Saved '{ob_name}' — {len(rows)} operations."
                 if bad_sam:
                     msg += f" {bad_sam} row(s) had a non-numeric or zero SAM and were skipped."
-                if new_count:
-                    msg += f" {new_count} operation(s) didn't match the reference taxonomy, so new Skill Group IDs were created for them."
+                if newly_created:
+                    msg += f" {len(newly_created)} operation(s) didn't match the reference taxonomy, so new Skill Group IDs were created for them."
                 st.success(msg)
 
     saved_obs = list_obs()
@@ -201,7 +201,7 @@ with tab_skill:
             if st.button("Confirm & Save Skill Matrix", type="primary"):
                 extra_taxonomy = extra_taxonomy_list()
                 cache: dict = {}
-                new_count = 0
+                newly_created = []  # batched to ONE db write at the end
                 resolved_sg = []
                 progress = st.progress(0.0, text="Matching skill names to skill groups...")
                 total = len(pairs)
@@ -213,23 +213,26 @@ with tab_skill:
                         sg, created, new_row, score = get_or_create_skill_group(text, mt, None, extra_taxonomy)
                         if created:
                             extra_taxonomy.append(new_row)
-                            record_taxonomy_extra({
+                            newly_created.append({
                                 "skill_group_id": new_row["skill_group_id"],
                                 "operation_description": new_row["operation_description"],
                                 "machine_type": new_row["machine_type"],
                                 "sam": new_row["sam"],
                             })
-                            new_count += 1
                         cache[cache_key] = sg
                     resolved_sg.append(cache[cache_key])
                     if i % 25 == 0 or i == total - 1:
                         progress.progress((i + 1) / total if total else 1.0, text=f"Matching... {i+1}/{total}")
                 progress.empty()
 
+                record_taxonomy_extra_bulk(newly_created)
+                new_count = len(newly_created)
+
                 pairs = pairs.copy()
                 pairs["skill_group"] = resolved_sg
                 pairs["employee"] = pairs["employee"].astype(str)
-                db.add_skill_pairs(pairs)
+                with st.spinner(f"Saving {len(pairs)} pairs to the database..."):
+                    db.add_skill_pairs(pairs)
 
                 msg = (
                     f"Saved {len(pairs)} employee-skill pairs from this file "
