@@ -127,8 +127,11 @@ with tab_emp:
             mapped["employee_id"] = mapped["employee_id"].astype(str)
             mapped["line"] = mapped["line"].astype(str)
             ensure_lines_registered(mapped["line"].unique().tolist())
-            db.upsert_employees(mapped)
-            st.success(f"Saved {len(mapped)} employees across {mapped['line'].nunique()} line(s).")
+            dup_count = db.upsert_employees(mapped)
+            msg = f"Saved {len(mapped) - dup_count} employees across {mapped['line'].nunique()} line(s)."
+            if dup_count:
+                msg += f" {dup_count} duplicate employee ID row(s) in this file were collapsed (kept the last one)."
+            st.success(msg)
 
     current = db.list_employees()
     if current is not None:
@@ -232,13 +235,15 @@ with tab_skill:
                 pairs["skill_group"] = resolved_sg
                 pairs["employee"] = pairs["employee"].astype(str)
                 with st.spinner(f"Saving {len(pairs)} pairs to the database..."):
-                    db.add_skill_pairs(pairs)
+                    dup_count = db.add_skill_pairs(pairs)
 
                 msg = (
-                    f"Saved {len(pairs)} employee-skill pairs from this file "
+                    f"Saved {len(pairs) - dup_count} employee-skill pairs from this file "
                     f"({pairs['employee'].nunique()} employees, {pairs['skill_text'].nunique()} distinct skill names). "
                     "Merged with whatever was already saved — new uploads add, they don't replace."
                 )
+                if dup_count:
+                    msg += f" {dup_count} duplicate (employee, skill) row(s) in this file were collapsed (kept the last one) — worth checking your source file for repeated entries."
                 if new_count:
                     msg += f" {new_count} skill name(s) didn't match the reference taxonomy, so new Skill Group IDs were created for them."
                 st.success(msg)
