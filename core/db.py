@@ -193,9 +193,15 @@ def list_employees():
     return pd.DataFrame(rows, columns=["employee_id", "employee_name", "line"]) if rows else None
 
 
-def upsert_employees(df):
+def upsert_employees(df) -> int:
+    """Same duplicate-row protection as add_skill_pairs — a batch with the
+    same employee_id twice would hit the same Postgres CardinalityViolation.
+    Returns how many duplicate rows were dropped (kept the last one)."""
     if df.empty:
-        return
+        return 0
+    before = len(df)
+    df = df.drop_duplicates(subset=["employee_id"], keep="last")
+    dropped = before - len(df)
     raw = get_engine().raw_connection()
     try:
         cur = raw.cursor()
@@ -210,6 +216,7 @@ def upsert_employees(df):
         raw.commit()
     finally:
         raw.close()
+    return dropped
 
 
 # --------------------------------------------------------------- Skill Matrix
@@ -220,7 +227,7 @@ def list_skill_pairs():
     return pd.DataFrame(rows, columns=["employee", "skill_text", "machine_type", "skill_group"]) if rows else None
 
 
-def add_skill_pairs(df):
+def add_skill_pairs(df) -> int:
     """
     Bulk upsert via execute_values — ONE network round trip per ~500 rows
     instead of one per row. This is the single biggest speed fix: a skill
@@ -228,9 +235,20 @@ def add_skill_pairs(df):
     1,000+ pairs, and the old row-by-row loop meant 1,000+ individual
     round trips to the (remote, Neon) database — easily minutes of wall
     time even though each statement itself is fast.
+
+    Postgres rejects a single ON CONFLICT batch that would update the same
+    (employee, skill_text) row twice (CardinalityViolation) — so duplicate
+    rows in the source file are deduplicated here first, keeping the LAST
+    occurrence (same "last write wins" behavior the old row-by-row loop had
+    silently, one row at a time). Returns how many duplicate rows were
+    dropped, so the caller can tell the user rather than hide it.
     """
     if df.empty:
-        return
+        return 0
+    before = len(df)
+    df = df.drop_duplicates(subset=["employee", "skill_text"], keep="last")
+    dropped = before - len(df)
+
     raw = get_engine().raw_connection()
     try:
         cur = raw.cursor()
@@ -249,6 +267,7 @@ def add_skill_pairs(df):
         raw.commit()
     finally:
         raw.close()
+    return dropped
 
 
 def clear_skill_matrix():
