@@ -1,6 +1,7 @@
 import streamlit as st
 
 from core.state import init_state, skill_matrix_dict, employee_line_dict, employee_names_dict, list_obs, get_ob, list_lines
+from core.evidence import employee_machine_types_dict, diagnose_unstaffed
 from core.orchestrate import run_multi_line
 from core.render import units_to_table, style_table, render_manual_assignment_ui
 from core.importers import read_any
@@ -32,6 +33,7 @@ ob_lines = list_lines()
 lines = st.multiselect("Lines", options=ob_lines, default=ob_lines)
 
 all_skill_matrix = skill_matrix_dict(ob_rows=ob["rows"])
+all_employee_machines = employee_machine_types_dict(ob["rows"], all_skill_matrix)
 all_employee_line = employee_line_dict()
 employee_names = employee_names_dict()
 all_employees = sorted(all_employee_line.keys())
@@ -54,6 +56,7 @@ if present is not None:
     st.caption(f"{len(present)} employee(s) marked present out of {len(all_employees)} total.")
 
     skill_matrix = {e: sgs for e, sgs in all_skill_matrix.items() if e in present}
+    employee_machines = {e: ms for e, ms in all_employee_machines.items() if e in present}
     employee_line = {e: line for e, line in all_employee_line.items() if e in present}
 
     if st.button("Run Absentee Balancing", type="primary", disabled=len(lines) < 2):
@@ -61,19 +64,19 @@ if present is not None:
         with st.spinner("Balancing across lines with present employees only..."):
             calcs_by_line, units = run_multi_line(
                 lines, rows_by_line, float(ob["shift_time"]), float(ob["target"]), float(ob["plan_efficiency"]),
-                skill_matrix, employee_line,
+                skill_matrix, employee_line, employee_machines,
             )
         op_lookup = {}
         for calcs in calcs_by_line.values():
             op_lookup.update({c.operation: (c.machine_type, c.sam) for c in calcs})
-        st.session_state["ab_result"] = (units, op_lookup)
+        st.session_state["ab_result"] = (units, op_lookup, skill_matrix, employee_machines)
         st.session_state["ab_overrides"] = {}
     if len(lines) < 2:
         st.caption("Pick at least two lines.")
 
 result = st.session_state.get("ab_result")
 if result:
-    units, op_lookup = result
+    units, op_lookup, run_skill_matrix, run_employee_machines = result
     st.divider()
 
     overrides = st.session_state.get("ab_overrides") or {}
@@ -85,6 +88,8 @@ if result:
     still_unstaffed = (df["Employee Code"] == "").sum()
     if still_unstaffed:
         st.error(f"{still_unstaffed} assignment(s) still have no employee assigned.")
+        with st.expander("Why are these unstaffed?"):
+            st.dataframe(diagnose_unstaffed(units, op_lookup, run_skill_matrix, run_employee_machines), width='stretch', hide_index=True)
     else:
         st.success("Every operation is staffed with present employees.")
     st.caption(f"{len(merged)} operator(s) assigned to more than one operation. {len(cross)} working across lines.")

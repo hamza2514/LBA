@@ -1,6 +1,7 @@
 import streamlit as st
 
 from core.state import init_state, skill_matrix_dict, employee_line_dict, employee_names_dict, list_obs, get_ob, list_lines
+from core.evidence import employee_machine_types_dict, diagnose_unstaffed
 from core.orchestrate import run_single_line, run_multi_line
 from core.render import units_to_table, style_table, render_manual_assignment_ui
 import core.db as db
@@ -31,6 +32,7 @@ ob = get_ob(ob_name)
 ob_lines = list_lines()
 
 skill_matrix = skill_matrix_dict(ob_rows=ob["rows"])
+employee_machines = employee_machine_types_dict(ob["rows"], skill_matrix)
 employee_line = employee_line_dict()
 employee_names = employee_names_dict()
 
@@ -47,9 +49,11 @@ st.caption("These can differ from the OB's original defaults — a specific line
 if mode == "Single Line":
     line = st.selectbox("Line", options=ob_lines)
     if st.button("Run Layout Balancing", type="primary"):
-        rows = ob["rows"]
         with st.spinner("Balancing..."):
-            calcs, units = run_single_line(line, rows, shift_time, target, plan_efficiency, skill_matrix, employee_line)
+            calcs, units = run_single_line(
+                line, ob["rows"], shift_time, target, plan_efficiency,
+                skill_matrix, employee_line, employee_machines,
+            )
         op_lookup = {c.operation: (c.machine_type, c.sam) for c in calcs}
         st.session_state["lb_result"] = (units, op_lookup)
         st.session_state["lb_overrides"] = {}
@@ -59,7 +63,10 @@ else:
     if st.button("Run Layout Balancing", type="primary", disabled=len(lines) < 2):
         rows_by_line = {line: ob["rows"] for line in lines}
         with st.spinner("Balancing across lines..."):
-            calcs_by_line, units = run_multi_line(lines, rows_by_line, shift_time, target, plan_efficiency, skill_matrix, employee_line)
+            calcs_by_line, units = run_multi_line(
+                lines, rows_by_line, shift_time, target, plan_efficiency,
+                skill_matrix, employee_line, employee_machines,
+            )
         op_lookup = {}
         for calcs in calcs_by_line.values():
             op_lookup.update({c.operation: (c.machine_type, c.sam) for c in calcs})
@@ -82,6 +89,8 @@ if result:
     still_unstaffed = (df["Employee Code"] == "").sum()
     if still_unstaffed:
         st.error(f"{still_unstaffed} assignment(s) still have no employee assigned.")
+        with st.expander("Why are these unstaffed?"):
+            st.dataframe(diagnose_unstaffed(units, op_lookup, skill_matrix, employee_machines), width='stretch', hide_index=True)
     else:
         st.success("Every operation is staffed.")
     st.caption(f"{len(merged)} operator(s) assigned to more than one operation. {len(cross)} working across lines.")
