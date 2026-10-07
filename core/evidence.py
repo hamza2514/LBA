@@ -53,3 +53,37 @@ def employee_machine_types_dict(ob_rows: list[dict], skill_matrix: dict) -> dict
             grant(emp, {normalize_machine(m) for m in roles.get(role_name, [])})
 
     return out
+
+
+def diagnose_unstaffed(units: list, op_lookup: dict, skill_matrix: dict, employee_machines: dict):
+    """
+    One row per unstaffed operation explaining WHY nobody was found:
+    how many employees hold the skill / machine experience at all, and how
+    many of them are still free (not already assigned elsewhere).
+    """
+    import pandas as pd
+    from core.assignment import normalize_machine
+
+    used = {u.employee for u in units if u.employee}
+    rows = []
+    for u in units:
+        if u.employee:
+            continue
+        for (line, operation, skill_group, _minutes, _target) in u.operations:
+            machine, _sam = op_lookup.get(operation, ("", None))
+            machine_key = normalize_machine(machine)
+            skilled = {e for e, sgs in skill_matrix.items() if skill_group in sgs}
+            experienced = {e for e, ms in employee_machines.items() if machine_key in ms}
+            rows.append(
+                {
+                    "Line": line,
+                    "Operation": operation,
+                    "Machine Type": machine,
+                    "Skill Group": skill_group,
+                    "Skilled (total)": len(skilled),
+                    "Skilled (free)": len(skilled - used),
+                    "Machine-experienced (total)": len(experienced),
+                    "Machine-experienced (free)": len(experienced - used),
+                }
+            )
+    return pd.DataFrame(rows)
