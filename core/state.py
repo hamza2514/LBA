@@ -1,12 +1,8 @@
 """
-Central data-access layer, now backed by real persistence (core/db.py)
-instead of st.session_state. Function names/shapes are kept close to the
-old session-only version so pages barely change — but every read now comes
-from Postgres, and every write survives across sessions, restarts, and
-deployments.
+Central data-access layer, backed by real persistence (core/db.py).
 
 st.session_state is still used for genuinely ephemeral, per-run UI state
-(the last balancing result, manual-override selections mid-form) — never
+(the last balancing result, manual-override selections mid-form) - never
 for anything that should outlive a single balancing run.
 """
 from __future__ import annotations
@@ -69,12 +65,8 @@ def record_taxonomy_extra_bulk(new_rows: list[dict]):
 
 # ------------------------------------------------------------- Roles layer
 def list_roles() -> dict:
-    """{role_name: [machine_type, ...]} — a Role grants qualification for
-    every operation on any of its listed machine types, regardless of the
-    specific operation name. This is how 'a Presser can do any press
-    operation' gets taught to the tool ONCE and applied automatically to
-    every OB from then on, instead of needing every individual operation
-    spelled out in someone's skill record."""
+    """{role_name: [machine_type, ...]} - a Role grants qualification for
+    every operation on any of its listed machine types."""
     return db.list_roles()
 
 
@@ -115,16 +107,17 @@ def delete_ob(name: str):
 # ----------------------------------------------------------- Skill matrix
 def skill_matrix_dict(ob_rows: list | None = None) -> dict:
     """
-    {employee: set(skill_group)} — combines THREE sources of qualification:
+    {employee: set(skill_group)} - combines THREE sources of qualification:
       1. Explicit skill-matrix entries, re-resolved against the active OB's
-         own operations first (same consistency fix as before) when ob_rows
-         is given, falling back to the stored resolution otherwise.
+         own operations first when ob_rows is given.
       2. Roles: an employee holding a Role qualifies for every OB operation
-         whose Machine Type is in that Role's machine-type list — this is
-         what makes 'Presser' actually work without the skill file ever
-         naming a single specific press operation.
+         whose Machine Type is in that Role's machine-type list.
+      3. Inferred from wording (core.inference): near-matches despite
+         typos/abbreviations, and compound operations ("A & B") where the
+         employee holds every component skill.
     """
     from core.matching import match_against_rows
+    from core.inference import infer_qualifications
 
     sdf = db.list_skill_pairs()
     roles = db.list_roles()
@@ -140,13 +133,12 @@ def skill_matrix_dict(ob_rows: list | None = None) -> dict:
             sg = stored_sg
             if ob_rows and text:
                 if text not in cache:
-                    matched_sg, score = match_against_rows(text, ob_rows)
+                    matched_sg, _score = match_against_rows(text, ob_rows)
                     cache[text] = matched_sg or stored_sg
                 sg = cache[text]
             out.setdefault(str(r["employee"]), set()).add(sg)
 
     if ob_rows and roles and emp_roles:
-        # machine_type -> all skill_groups on that machine in THIS ob
         machine_to_skillgroups: dict = {}
         for row in ob_rows:
             machine_to_skillgroups.setdefault(row.get("machine_type"), set()).add(row.get("skill_group"))
@@ -158,5 +150,9 @@ def skill_matrix_dict(ob_rows: list | None = None) -> dict:
                     granted |= machine_to_skillgroups.get(mt, set())
             if granted:
                 out.setdefault(emp, set()).update(granted)
+
+    if ob_rows and sdf is not None:
+        for emp, sgs in infer_qualifications(ob_rows, sdf).items():
+            out.setdefault(emp, set()).update(sgs)
 
     return out

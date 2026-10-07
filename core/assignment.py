@@ -15,6 +15,7 @@ Each row an AssignedUnit carries in `operations` is a 5-tuple:
 """
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 
 from core.formulas import OperationCalc
@@ -37,8 +38,9 @@ class AssignedUnit:
 
 
 def normalize_machine(machine_type) -> str:
-    """Canonical machine-type key: whitespace-collapsed, upper-case."""
-    return " ".join(str(machine_type or "").split()).upper()
+    """Canonical machine-type key: upper-case alphanumerics only, so
+    '3T O/L', '3TO/L' and '3t-o/l' are the same machine."""
+    return re.sub(r"[^A-Z0-9]", "", str(machine_type or "").upper())
 
 
 def _qualified_by_skill(skill_groups: set, skill_matrix: dict) -> set:
