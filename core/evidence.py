@@ -1,23 +1,36 @@
-"""Machine-type evidence per employee, used by the fallback tier in assignment.py."""
+"""
+Builds the StaffingEvidence for one Operation Breakdown from the database:
+who is strongly qualified, partially qualified, related-skilled, and
+machine-experienced for each Skill Group in that OB.
+"""
 from __future__ import annotations
 
 import core.db as db
+from core.inference import infer_weak_evidence
+from core.staffing import StaffingEvidence, normalize_machine
 
-def employee_machine_types_dict(ob_rows: list[dict], skill_matrix: dict) -> dict:
+_FUZZY_MACHINE_INFERENCE_THRESHOLD = 75
+
+
+def _invert(skill_matrix: dict) -> dict:
+    """{employee: set(sg)} -> {sg: set(employee)}"""
+    out: dict = {}
+    for emp, sgs in skill_matrix.items():
+        for sg in sgs:
+            out.setdefault(sg, set()).add(emp)
+    return out
+
+
+def _employee_machines(ob_rows: list[dict], skill_matrix: dict, skill_pairs) -> dict:
     """
-    {employee: set(normalized machine type)} - the evidence behind the
-    machine-type fallback in assignment.py. Sources, in order:
-      1. Every Skill Group the employee holds (already resolved against the
-         active OB) -> the machine types those groups sit on in THIS OB.
-      2. Skill-matrix text that did not resolve exactly: fuzzy-matched
-         (lower threshold) against the OB's own operations.
+    {employee: set(normalized machine type)}. Sources:
+      1. Machine types of every Skill Group the employee holds, in THIS OB.
+      2. Skill text that did not resolve exactly: fuzzy-matched against the
+         OB's own operations.
       3. Machine Type given explicitly in the uploaded skill file.
       4. Roles: every machine type of every role the employee holds.
     """
-    from core.assignment import normalize_machine
     from core.matching import match_against_rows
-
-    FUZZY_THRESHOLD = 75
 
     sg_to_machines: dict = {}
     for row in ob_rows or []:
@@ -34,16 +47,15 @@ def employee_machine_types_dict(ob_rows: list[dict], skill_matrix: dict) -> dict
         for sg in sgs:
             grant(emp, sg_to_machines.get(sg, ()))
 
-    sdf = db.list_skill_pairs()
-    if sdf is not None:
+    if skill_pairs is not None:
         text_cache: dict = {}
-        for _, r in sdf.iterrows():
+        for _, r in skill_pairs.iterrows():
             emp = str(r["employee"])
             grant(emp, {normalize_machine(r.get("machine_type"))})
             text = r.get("skill_text")
             if ob_rows and text:
                 if text not in text_cache:
-                    sg, _ = match_against_rows(text, ob_rows, threshold=FUZZY_THRESHOLD)
+                    sg, _score = match_against_rows(text, ob_rows, threshold=_FUZZY_MACHINE_INFERENCE_THRESHOLD)
                     text_cache[text] = sg_to_machines.get(sg, set()) if sg else set()
                 grant(emp, text_cache[text])
 
@@ -55,14 +67,22 @@ def employee_machine_types_dict(ob_rows: list[dict], skill_matrix: dict) -> dict
     return out
 
 
-def diagnose_unstaffed(units: list, op_lookup: dict, skill_matrix: dict, employee_machines: dict):
-    """
-    One row per unstaffed operation explaining WHY nobody was found:
-    how many employees hold the skill / machine experience at all, and how
-    many of them are still free (not already assigned elsewhere).
-    """
+def build_staffing_evidence(ob_rows: list[dict], skill_matrix: dict) -> StaffingEvidence:
+    """skill_matrix: {employee: set(skill_group)} from core.state.skill_matrix_dict."""
+    skill_pairs = db.list_skill_pairs()
+    partial, related = infer_weak_evidence(ob_rows, skill_pairs)
+    return StaffingEvidence(
+        strong=_invert(skill_matrix),
+        partial=partial,
+        related=related,
+        machines=_employee_machines(ob_rows, skill_matrix, skill_pairs),
+    )
+
+
+def diagnose_unstaffed(units: list, op_lookup: dict, evidence: StaffingEvidence):
+    """One row per unstaffed operation explaining how much evidence existed
+    and how much of it was already used elsewhere."""
     import pandas as pd
-    from core.assignment import normalize_machine
 
     used = {u.employee for u in units if u.employee}
     rows = []
@@ -71,19 +91,19 @@ def diagnose_unstaffed(units: list, op_lookup: dict, skill_matrix: dict, employe
             continue
         for (line, operation, skill_group, _minutes, _target) in u.operations:
             machine, _sam = op_lookup.get(operation, ("", None))
-            machine_key = normalize_machine(machine)
-            skilled = {e for e, sgs in skill_matrix.items() if skill_group in sgs}
-            experienced = {e for e, ms in employee_machines.items() if machine_key in ms}
+            strong = set(evidence.strong.get(skill_group, ()))
+            partial = set(evidence.partial.get(skill_group, ()))
+            related = set(evidence.related.get(skill_group, {}))
+            experienced = evidence.machine_candidates({normalize_machine(machine)})
             rows.append(
                 {
                     "Line": line,
                     "Operation": operation,
                     "Machine Type": machine,
-                    "Skill Group": skill_group,
-                    "Skilled (total)": len(skilled),
-                    "Skilled (free)": len(skilled - used),
-                    "Machine-experienced (total)": len(experienced),
-                    "Machine-experienced (free)": len(experienced - used),
+                    "Skilled (free/total)": f"{len(strong - used)}/{len(strong)}",
+                    "Partial (free/total)": f"{len(partial - used)}/{len(partial)}",
+                    "Related (free/total)": f"{len(related - used)}/{len(related)}",
+                    "Machine-experienced (free/total)": f"{len(experienced - used)}/{len(experienced)}",
                 }
             )
     return pd.DataFrame(rows)

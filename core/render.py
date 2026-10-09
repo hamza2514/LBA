@@ -1,7 +1,7 @@
 """Turns a list of AssignedUnit into the requested results table:
 Sr#, Line, Operation, Machine Type, SAM, Employee Code, Employee Name,
-Target — with merged/pooled operations color-coded so it's visible at a
-glance which operations share one person."""
+Assigned By, Target - with merged/pooled operations color-coded so it's
+visible at a glance which operations share one person."""
 from __future__ import annotations
 
 import pandas as pd
@@ -11,17 +11,22 @@ PALETTE = [
     "#D0E0E3", "#FCE5CD", "#EAD1DC", "#D9D2E9", "#C9DAF8",
 ]
 
+BASIS_LABELS = {
+    "skill": "Skill",
+    "partial": "Partial skill",
+    "related": "Related skill",
+    "machine": "Machine type",
+}
+
 
 def units_to_table(units, op_lookup: dict, employee_names: dict | None = None, manual_overrides: dict | None = None) -> tuple[pd.DataFrame, dict]:
     """
-    op_lookup: {operation_name: (machine_type, sam)} — built from the
+    op_lookup: {operation_name: (machine_type, sam)} - built from the
     computed OperationCalc list, since AssignedUnit rows only carry
     operation/skill_group/minutes/target, not machine/SAM.
     employee_names: {employee_id: employee_name}
-    manual_overrides: {row_index: (employee_code, employee_name)} — applied
-    on top of the automatic assignment, for rows the user filled in by hand
-    because nobody in the skill matrix matched. row_index is this table's
-    own 0-based position, stable as long as the same `units` list is reused.
+    manual_overrides: {unit_id: (employee_code, employee_name)} - applied on
+    top of the automatic assignment, for units the user filled in by hand.
     """
     employee_names = employee_names or {}
     manual_overrides = manual_overrides or {}
@@ -35,9 +40,11 @@ def units_to_table(units, op_lookup: dict, employee_names: dict | None = None, m
     for unit_id, u in enumerate(units):
         is_manual = (not u.employee) and (unit_id in manual_overrides)
         emp_code, emp_name = (u.employee or ""), (employee_names.get(u.employee, "") if u.employee else "⚠️ UNSTAFFED")
+        assigned_by = BASIS_LABELS.get(u.basis, "")
         if is_manual:
             emp_code, emp_name = manual_overrides[unit_id]
             emp_name = emp_name + " (manual)"
+            assigned_by = "Manual"
         for (line, operation, skill_group, minutes, target) in u.operations:
             machine_type, sam = op_lookup.get(operation, ("", None))
             rows.append(
@@ -48,6 +55,7 @@ def units_to_table(units, op_lookup: dict, employee_names: dict | None = None, m
                     "SAM": round(sam, 4) if sam is not None else "",
                     "Employee Code": emp_code,
                     "Employee Name": emp_name,
+                    "Assigned By": assigned_by,
                     "Target": round(target) if target else 0,
                     "Cross-Line": "Yes" if u.cross_line else "",
                     "_color_key": u.color_key,
@@ -66,10 +74,9 @@ def render_manual_assignment_ui(df: pd.DataFrame, employees_df, overrides_key: s
     """
     Renders a small form letting the user manually assign an employee to
     any UNIT (a single operation, or a merged/cross-line bin) the automatic
-    engine couldn't staff — one choice per unit, applied to every row that
-    unit covers, since a merged bin is meant to be one person. Suggestions
-    are sorted so employees already on that unit's line(s) come first.
-    Writes choices into st.session_state[overrides_key]
+    engine couldn't staff - one choice per unit, applied to every row that
+    unit covers. Suggestions are sorted so employees already on that unit's
+    line(s) come first. Writes choices into st.session_state[overrides_key]
     ({unit_id: (code, name)}) and reruns so the table picks them up.
     """
     import streamlit as st
@@ -88,7 +95,7 @@ def render_manual_assignment_ui(df: pd.DataFrame, employees_df, overrides_key: s
 
     st.divider()
     st.subheader(f"✍️ Manually assign {len(unstaffed_units)} unstaffed operation(s)")
-    st.caption("Nobody in the skill matrix matched these — pick someone yourself. Same-line employees are listed first. A merged/cross-line operation gets ONE assignment covering all its lines.")
+    st.caption("Nobody matched these - pick someone yourself. Same-line employees are listed first. A merged/cross-line operation gets ONE assignment covering all its lines.")
 
     emp_options_cache: dict = {}
     names = dict(zip(employees_df["employee_id"], employees_df["employee_name"]))
@@ -113,7 +120,7 @@ def render_manual_assignment_ui(df: pd.DataFrame, employees_df, overrides_key: s
             labels = options_for_lines(row["lines"])
             line_str = " & ".join(row["lines"])
             choice = st.selectbox(
-                f"{row['label']} — {line_str}",
+                f"{row['label']} - {line_str}",
                 options=labels,
                 key=f"{overrides_key}_{row['_unit_id']}",
             )
@@ -133,5 +140,4 @@ def style_table(df: pd.DataFrame, color_map: dict):
         return [f"background-color: {color}" if color else "" for _ in row]
 
     hide_cols = [c for c in ["_color_key", "_row_index", "_unit_id"] if c in df.columns]
-    styled = df.style.apply(highlight, axis=1).hide(axis="columns", subset=hide_cols)
-    return styled
+    return df.style.apply(highlight, axis=1).hide(axis="columns", subset=hide_cols)

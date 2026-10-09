@@ -27,12 +27,33 @@ COMPONENT_MATCH_THRESHOLD = 86
 MACHINE_SIMILARITY_THRESHOLD = 80
 AMBIGUITY_MARGIN = 3  # accept runner-up skill texts within this many points of the best
 
+# "Related wording" evidence (weaker than a near-match, stronger than machine-only).
+MIN_SHARED_TOKENS = 2
+RELATED_MIN_COVERAGE = 0.66   # share of the shorter name's words found in the other
+TOKEN_TYPO_THRESHOLD = 80
+_STOP_TOKENS = {"for", "with", "the", "and", "into", "onto", "from", "time", "times", "after", "before", "all", "round"}
+# Words that describe the action or position rather than the part being worked on.
+# Sharing ONLY these is not evidence of related skill (e.g. "BACK X ATTACH" vs "BACK Y ATTACH").
+_GENERIC_TOKENS = {
+    "attach", "top", "make", "stitch", "close", "set", "join", "tack", "tacking",
+    "back", "front", "side", "left", "right", "upper", "lower", "inner", "outer",
+    "panel", "single", "both", "complete", "marking",
+}
+
 # Spelling variants seen in real files, canonicalised before scoring.
-_CANONICAL = (
-    (re.compile(r"\bsurge\b"), "serge"),
-    (re.compile(r"\bfornt\b"), "front"),
-    (re.compile(r"\bbartake\b"), "bartack"),
-    (re.compile(r"\blinning\b"), "lining"),
+_CANONICAL = tuple(
+    (re.compile(rf"\b{wrong}\b"), right)
+    for wrong, right in (
+        ("surge", "serge"),
+        ("fornt", "front"),
+        ("bartake", "bartack"),
+        ("barteck", "bartack"),
+        ("linning", "lining"),
+        ("lable", "label"),
+        ("segrigation", "segregation"),
+        ("sefty", "safety"),
+        ("pkt", "pocket"),
+    )
 )
 
 
@@ -95,18 +116,73 @@ def build_vocab(skill_pairs) -> dict:
     return vocab
 
 
+def _meaningful_tokens(text: str) -> list[str]:
+    cleaned = normalize(_canonical(text)).replace("&", " ")
+    tokens = [t for t in cleaned.split() if len(t) >= 3 and t not in _STOP_TOKENS]
+    return list(dict.fromkeys(tokens))
+
+
+def _same_token(a: str, b: str) -> bool:
+    if a == b:
+        return True
+    return len(a) >= 4 and len(b) >= 4 and fuzz.ratio(a, b) >= TOKEN_TYPO_THRESHOLD
+
+
+def token_overlap(a: str, b: str) -> float:
+    """
+    0..1 strength of wording overlap between two operation names, based on
+    the words of the SHORTER name that also appear (typo-tolerant) in the
+    longer one. Returns 0 unless at least two words are shared and at least
+    one of them names a part/object rather than just an action or position.
+        "BACK LABLE ATTACH"      ~ "CENTER BACK LABEL ATTACH"  -> 1.0
+        "BOTTOM HEM RUN STITCH"  ~ "BOTTOM HEM (SNLS)"         -> 1.0
+    """
+    ta, tb = _meaningful_tokens(a), _meaningful_tokens(b)
+    if not ta or not tb:
+        return 0.0
+    small, large = (ta, tb) if len(ta) <= len(tb) else (tb, ta)
+    shared = [t for t in small if any(_same_token(t, u) for u in large)]
+    if len(shared) < MIN_SHARED_TOKENS or all(t in _GENERIC_TOKENS for t in shared):
+        return 0.0
+    coverage = len(shared) / len(small)
+    return coverage if coverage >= RELATED_MIN_COVERAGE else 0.0
+
+
+def related_holders(operation: str, machine: str, vocab: dict) -> dict:
+    """{employee: strength} for people holding a skill with related wording
+    on a compatible machine. Strength = best overlap over their skills."""
+    out: dict = {}
+    for info in vocab.values():
+        if not _machines_compatible(machine, info["machine"]):
+            continue
+        strength = token_overlap(operation, info["text"])
+        if strength <= 0:
+            continue
+        for emp in info["holders"]:
+            out[emp] = max(out.get(emp, 0.0), strength)
+    return out
+
+
 def explain_operation(operation: str, machine: str, vocab: dict) -> dict:
-    """Why an operation was (or was not) matched - used for diagnostics and tests.
-    Returns {"mode": "near-match"|"composition"|"none", "texts": [...], "holders": set}"""
+    """
+    Why an operation was (or was not) matched.
+    Returns {"mode": "near-match"|"composition"|"partial"|"none",
+             "texts": [...], "holders": set, "partial": set}
+      holders - qualified outright (whole name or EVERY component)
+      partial - hold at least one component of a compound operation
+    """
     whole = _best_texts(operation, vocab, machine, WHOLE_MATCH_THRESHOLD)
     if whole:
-        return {"mode": "near-match", "texts": sorted({vocab[k]["text"] for k in whole}), "holders": _holders(whole, vocab)}
+        return {"mode": "near-match", "texts": sorted({vocab[k]["text"] for k in whole}),
+                "holders": _holders(whole, vocab), "partial": set()}
 
     components = split_components(operation)
+    none = {"mode": "none", "texts": [], "holders": set(), "partial": set()}
     if len(components) < 2:
-        return {"mode": "none", "texts": [], "holders": set()}
+        return none
 
     matched: list[list[tuple]] = []
+    all_matched = True
     for options in component_variants(components):
         best: list[tuple] = []
         best_score = 0.0
@@ -116,16 +192,25 @@ def explain_operation(operation: str, machine: str, vocab: dict) -> dict:
                 score = max(similarity(option, vocab[k]["text"]) for k in keys)
                 if score > best_score:
                     best, best_score = keys, score
-        if not best:
-            return {"mode": "none", "texts": [], "holders": set()}
-        matched.append(best)
+        if best:
+            matched.append(best)
+        else:
+            all_matched = False
 
-    holders = set.intersection(*(_holders(texts, vocab) for texts in matched))
-    return {"mode": "composition", "texts": sorted({vocab[k]["text"] for ks in matched for k in ks}), "holders": holders}
+    if not matched:
+        return none
+
+    holder_sets = [_holders(keys, vocab) for keys in matched]
+    texts = sorted({vocab[k]["text"] for ks in matched for k in ks})
+    union = set().union(*holder_sets)
+    if all_matched:
+        everyone = set.intersection(*holder_sets)
+        return {"mode": "composition", "texts": texts, "holders": everyone, "partial": union - everyone}
+    return {"mode": "partial", "texts": texts, "holders": set(), "partial": union}
 
 
 def infer_qualifications(ob_rows: list[dict], skill_pairs) -> dict:
-    """{employee: set(skill_group)} inferred for the operations in ob_rows."""
+    """{employee: set(skill_group)} qualified outright for the operations in ob_rows."""
     if skill_pairs is None or not ob_rows:
         return {}
     vocab = build_vocab(skill_pairs)
@@ -138,3 +223,30 @@ def infer_qualifications(ob_rows: list[dict], skill_pairs) -> dict:
         for emp in cache[key]:
             out[emp].add(row["skill_group"])
     return dict(out)
+
+
+def infer_weak_evidence(ob_rows: list[dict], skill_pairs) -> tuple[dict, dict]:
+    """
+    Evidence weaker than a qualification, per Skill Group:
+      partial: {skill_group: set(employee)}          holds some component skills
+      related: {skill_group: {employee: strength}}   holds similarly-worded skills
+    """
+    partial: dict = defaultdict(set)
+    related: dict = defaultdict(dict)
+    if skill_pairs is None or not ob_rows:
+        return {}, {}
+    vocab = build_vocab(skill_pairs)
+    cache: dict = {}
+    for row in ob_rows:
+        key = (row["operation"], row.get("machine_type") or "")
+        if key not in cache:
+            cache[key] = (
+                explain_operation(key[0], key[1], vocab)["partial"],
+                related_holders(key[0], key[1], vocab),
+            )
+        part, rel = cache[key]
+        sg = row["skill_group"]
+        partial[sg] |= part
+        for emp, strength in rel.items():
+            related[sg][emp] = max(related[sg].get(emp, 0.0), strength)
+    return dict(partial), dict(related)
