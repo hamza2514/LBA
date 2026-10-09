@@ -55,3 +55,22 @@ def test_unrelated_operation_gets_no_inference():
 def test_infer_qualifications_maps_to_skill_group():
     rows = [{"operation": "S/FLY D/FLY & FORNT RISE SURGE", "machine_type": "3T O/L", "skill_group": "SG-X"}]
     assert infer_qualifications(rows, SKILLS) == {"E1": {"SG-X"}}
+
+
+def test_compound_partial_holders_are_reported():
+    result = explain_operation("S/FLY D/FLY & FORNT RISE SURGE", "3T O/L", build_vocab(SKILLS))
+    assert result["holders"] == {"E1"}
+    assert result["partial"] == {"E2", "E3"}
+
+
+def test_related_wording_matches_sibling_operations():
+    from core.inference import token_overlap
+
+    assert token_overlap("BACK LABLE ATTACH", "CENTER BACK LABEL ATTACH") == 1.0
+    assert token_overlap("BOTTOM HEM RUN STITCH", "BOTTOM HEM (SNLS)") == 1.0
+
+
+def test_related_wording_ignores_shared_generic_words_only():
+    from core.inference import token_overlap
+
+    assert token_overlap("BACK RISE ATTACH", "BACK LABEL ATTACH") == 0.0
