@@ -1,22 +1,21 @@
 """
-Real persistence layer (Postgres — Neon, same pattern as the loss-time
-tracker). Everything that used to live only in st.session_state and vanish
-on reload — Lines, Operation Breakdowns, Employees, Skill Matrix, the
-auto-extended taxonomy, and Roles — now lives here and survives across
-sessions, deployments, and restarts.
+Persistence layer (Postgres — Neon). Lines, Operation Breakdowns, Employees,
+Skill Matrix, the auto-extended taxonomy and Roles all live here and survive
+across sessions, deployments and restarts.
 
-Connection string comes from Streamlit secrets (DATABASE_URL) in
-production, falling back to the DATABASE_URL environment variable for
-local development/testing.
+Connection string comes from Streamlit secrets (DATABASE_URL) in production,
+falling back to the DATABASE_URL environment variable for local development.
 """
 from __future__ import annotations
 
-import os
 import json
+import os
+
+import pandas as pd
 import streamlit as st
+from psycopg2.extras import execute_values
 from sqlalchemy import create_engine, text
 from sqlalchemy.engine import Engine
-from psycopg2.extras import execute_values
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS lines (
@@ -37,8 +36,11 @@ CREATE TABLE IF NOT EXISTS ob_rows (
     operation TEXT NOT NULL,
     machine_type TEXT,
     sam DOUBLE PRECISION NOT NULL,
-    skill_group TEXT NOT NULL
+    skill_group TEXT NOT NULL,
+    section TEXT NOT NULL DEFAULT ''
 );
+
+ALTER TABLE ob_rows ADD COLUMN IF NOT EXISTS section TEXT NOT NULL DEFAULT '';
 
 CREATE TABLE IF NOT EXISTS employees (
     employee_id TEXT PRIMARY KEY,
@@ -74,6 +76,8 @@ CREATE TABLE IF NOT EXISTS employee_roles (
 );
 """
 
+_PAGE_SIZE = 500
+
 
 @st.cache_resource
 def get_engine() -> Engine:
@@ -81,17 +85,14 @@ def get_engine() -> Engine:
     try:
         url = st.secrets.get("DATABASE_URL", None)
     except Exception:
-        pass  # no secrets.toml at all (e.g. local dev) — fall through to env var
-    if not url:
-        url = os.environ.get("DATABASE_URL")
+        pass  # no secrets.toml (local dev) — fall through to env var
+    url = url or os.environ.get("DATABASE_URL")
     if not url:
         raise RuntimeError(
             "No DATABASE_URL found. Set it in Streamlit secrets (production) "
             "or as an environment variable (local development)."
         )
-    # force the psycopg2 driver explicitly — SQLAlchemy 2.x may otherwise
-    # prefer a different driver depending on what's installed, and a plain
-    # Neon connection string (postgresql://...) doesn't specify one
+    # force the psycopg2 driver explicitly (plain Neon URLs don't name one)
     if url.startswith("postgresql://"):
         url = url.replace("postgresql://", "postgresql+psycopg2://", 1)
     engine = create_engine(url, pool_pre_ping=True)
@@ -100,6 +101,16 @@ def get_engine() -> Engine:
             if stmt.strip():
                 conn.execute(text(stmt))
     return engine
+
+
+def _bulk_execute(sql: str, values: list[tuple]) -> None:
+    """One network round trip per _PAGE_SIZE rows instead of one per row."""
+    raw = get_engine().raw_connection()
+    try:
+        execute_values(raw.cursor(), sql, values, page_size=_PAGE_SIZE)
+        raw.commit()
+    finally:
+        raw.close()
 
 
 # ---------------------------------------------------------------------- Lines
@@ -145,19 +156,10 @@ def save_ob(name: str, shift_time: float, target: float, plan_efficiency: float,
         conn.execute(text("DELETE FROM ob_rows WHERE ob_name = :name"), {"name": name})
 
     if rows:
-        raw = get_engine().raw_connection()
-        try:
-            cur = raw.cursor()
-            values = [(name, r["operation"], r.get("machine_type"), r["sam"], r["skill_group"]) for r in rows]
-            execute_values(
-                cur,
-                "INSERT INTO ob_rows (ob_name, operation, machine_type, sam, skill_group) VALUES %s",
-                values,
-                page_size=500,
-            )
-            raw.commit()
-        finally:
-            raw.close()
+        _bulk_execute(
+            "INSERT INTO ob_rows (ob_name, operation, machine_type, sam, skill_group, section) VALUES %s",
+            [(name, r["operation"], r.get("machine_type"), r["sam"], r["skill_group"], r.get("section") or "") for r in rows],
+        )
 
 
 def get_ob(name: str) -> dict | None:
@@ -169,14 +171,17 @@ def get_ob(name: str) -> dict | None:
         if not meta:
             return None
         rows = conn.execute(
-            text("SELECT operation, machine_type, sam, skill_group FROM ob_rows WHERE ob_name = :n ORDER BY id"),
+            text("SELECT operation, machine_type, sam, skill_group, section FROM ob_rows WHERE ob_name = :n ORDER BY id"),
             {"n": name},
         ).fetchall()
     return {
         "shift_time": meta[0],
         "target": meta[1],
         "plan_efficiency": meta[2],
-        "rows": [{"operation": r[0], "machine_type": r[1], "sam": r[2], "skill_group": r[3]} for r in rows],
+        "rows": [
+            {"operation": r[0], "machine_type": r[1], "sam": r[2], "skill_group": r[3], "section": r[4] or ""}
+            for r in rows
+        ],
     }
 
 
@@ -186,88 +191,50 @@ def delete_ob(name: str):
 
 
 # ------------------------------------------------------------------ Employees
-def list_employees():
-    import pandas as pd
+def list_employees() -> pd.DataFrame | None:
     with get_engine().connect() as conn:
         rows = conn.execute(text("SELECT employee_id, employee_name, line FROM employees ORDER BY employee_id")).fetchall()
     return pd.DataFrame(rows, columns=["employee_id", "employee_name", "line"]) if rows else None
 
 
-def upsert_employees(df) -> int:
-    """Same duplicate-row protection as add_skill_pairs — a batch with the
-    same employee_id twice would hit the same Postgres CardinalityViolation.
-    Returns how many duplicate rows were dropped (kept the last one)."""
+def upsert_employees(df: pd.DataFrame) -> int:
+    """Upserts employees. Duplicate employee_id rows in one batch would raise a
+    Postgres CardinalityViolation, so they are collapsed first (keep last).
+    Returns how many duplicate rows were dropped."""
     if df.empty:
         return 0
     before = len(df)
     df = df.drop_duplicates(subset=["employee_id"], keep="last")
-    dropped = before - len(df)
-    raw = get_engine().raw_connection()
-    try:
-        cur = raw.cursor()
-        values = [(str(r["employee_id"]), r["employee_name"], str(r["line"])) for _, r in df.iterrows()]
-        execute_values(
-            cur,
-            "INSERT INTO employees (employee_id, employee_name, line) VALUES %s "
-            "ON CONFLICT (employee_id) DO UPDATE SET employee_name = EXCLUDED.employee_name, line = EXCLUDED.line",
-            values,
-            page_size=500,
-        )
-        raw.commit()
-    finally:
-        raw.close()
-    return dropped
+    _bulk_execute(
+        "INSERT INTO employees (employee_id, employee_name, line) VALUES %s "
+        "ON CONFLICT (employee_id) DO UPDATE SET employee_name = EXCLUDED.employee_name, line = EXCLUDED.line",
+        [(str(r["employee_id"]), r["employee_name"], str(r["line"])) for _, r in df.iterrows()],
+    )
+    return before - len(df)
 
 
 # --------------------------------------------------------------- Skill Matrix
-def list_skill_pairs():
-    import pandas as pd
+def list_skill_pairs() -> pd.DataFrame | None:
     with get_engine().connect() as conn:
         rows = conn.execute(text("SELECT employee, skill_text, machine_type, skill_group FROM skill_matrix")).fetchall()
     return pd.DataFrame(rows, columns=["employee", "skill_text", "machine_type", "skill_group"]) if rows else None
 
 
-def add_skill_pairs(df) -> int:
-    """
-    Bulk upsert via execute_values — ONE network round trip per ~500 rows
-    instead of one per row. This is the single biggest speed fix: a skill
-    matrix with hundreds of employees x several skills each can easily be
-    1,000+ pairs, and the old row-by-row loop meant 1,000+ individual
-    round trips to the (remote, Neon) database — easily minutes of wall
-    time even though each statement itself is fast.
-
-    Postgres rejects a single ON CONFLICT batch that would update the same
-    (employee, skill_text) row twice (CardinalityViolation) — so duplicate
-    rows in the source file are deduplicated here first, keeping the LAST
-    occurrence (same "last write wins" behavior the old row-by-row loop had
-    silently, one row at a time). Returns how many duplicate rows were
-    dropped, so the caller can tell the user rather than hide it.
-    """
+def add_skill_pairs(df: pd.DataFrame) -> int:
+    """Bulk upsert (one round trip per page). Duplicate (employee, skill_text)
+    rows are collapsed first (keep last) to avoid CardinalityViolation.
+    Returns how many duplicate rows were dropped."""
     if df.empty:
         return 0
     before = len(df)
     df = df.drop_duplicates(subset=["employee", "skill_text"], keep="last")
-    dropped = before - len(df)
-
-    raw = get_engine().raw_connection()
-    try:
-        cur = raw.cursor()
-        values = [
-            (r["employee"], r["skill_text"], r.get("machine_type"), r["skill_group"])
-            for _, r in df.iterrows()
-        ]
-        execute_values(
-            cur,
-            "INSERT INTO skill_matrix (employee, skill_text, machine_type, skill_group) VALUES %s "
-            "ON CONFLICT (employee, skill_text) DO UPDATE SET "
-            "machine_type = EXCLUDED.machine_type, skill_group = EXCLUDED.skill_group",
-            values,
-            page_size=500,
-        )
-        raw.commit()
-    finally:
-        raw.close()
-    return dropped
+    _bulk_execute(
+        "INSERT INTO skill_matrix (employee, skill_text, machine_type, skill_group) VALUES %s "
+        "ON CONFLICT (employee, skill_text) DO UPDATE SET "
+        "machine_type = EXCLUDED.machine_type, skill_group = EXCLUDED.skill_group",
+        [(r["employee"], r["skill_text"], r.get("machine_type"), r["skill_group"]) for _, r in df.iterrows()],
+    )
+    return before - len(df)
 
 
 def clear_skill_matrix():
@@ -281,51 +248,21 @@ def list_taxonomy_extra() -> list[dict]:
         rows = conn.execute(
             text("SELECT skill_group_id, operation_description, machine_type, sam FROM taxonomy_extra")
         ).fetchall()
-    return [
-        {"skill_group_id": r[0], "operation_description": r[1], "machine_type": r[2], "sam": r[3]}
-        for r in rows
-    ]
+    return [{"skill_group_id": r[0], "operation_description": r[1], "machine_type": r[2], "sam": r[3]} for r in rows]
 
 
 def add_taxonomy_extra_bulk(new_rows: list[dict]):
-    """Same fix as add_skill_pairs — batch newly auto-created skill groups
-    into one round trip instead of one insert per new group found during
-    an import."""
     if not new_rows:
         return
-    raw = get_engine().raw_connection()
-    try:
-        cur = raw.cursor()
-        values = [
-            (r["skill_group_id"], r["operation_description"], r.get("machine_type"), r.get("sam"))
-            for r in new_rows
-        ]
-        execute_values(
-            cur,
-            "INSERT INTO taxonomy_extra (skill_group_id, operation_description, machine_type, sam) "
-            "VALUES %s ON CONFLICT DO NOTHING",
-            values,
-            page_size=500,
-        )
-        raw.commit()
-    finally:
-        raw.close()
+    _bulk_execute(
+        "INSERT INTO taxonomy_extra (skill_group_id, operation_description, machine_type, sam) "
+        "VALUES %s ON CONFLICT DO NOTHING",
+        [(r["skill_group_id"], r["operation_description"], r.get("machine_type"), r.get("sam")) for r in new_rows],
+    )
 
 
 def add_taxonomy_extra(new_row: dict):
-    with get_engine().begin() as conn:
-        conn.execute(
-            text(
-                "INSERT INTO taxonomy_extra (skill_group_id, operation_description, machine_type, sam) "
-                "VALUES (:sg, :desc, :mt, :sam) ON CONFLICT DO NOTHING"
-            ),
-            {
-                "sg": new_row["skill_group_id"],
-                "desc": new_row["operation_description"],
-                "mt": new_row.get("machine_type"),
-                "sam": new_row.get("sam"),
-            },
-        )
+    add_taxonomy_extra_bulk([new_row])
 
 
 # ------------------------------------------------------------------- Roles
@@ -333,10 +270,7 @@ def list_roles() -> dict:
     """{role_name: [machine_type, ...]}"""
     with get_engine().connect() as conn:
         rows = conn.execute(text("SELECT name, machine_types FROM roles ORDER BY name")).fetchall()
-    out = {}
-    for name, mts in rows:
-        out[name] = mts if isinstance(mts, list) else json.loads(mts)
-    return out
+    return {name: mts if isinstance(mts, list) else json.loads(mts) for name, mts in rows}
 
 
 def save_role(name: str, machine_types: list[str]):

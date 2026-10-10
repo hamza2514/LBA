@@ -25,6 +25,8 @@ class OperationCalc:
     work_minutes: float  # internal only — never shown in the OB view
     target: float = 0.0
     target_per_employee: float = 0.0
+    section: str = ""
+    seq: int = 0  # position of the operation in the OB (0-based)
 
 
 def head_allocated_rule(manpower_eff: float) -> int:
@@ -49,6 +51,8 @@ def compute_operation(
     shift_time: float,
     target: float,
     plan_efficiency: float,
+    section: str = "",
+    seq: int = 0,
 ) -> OperationCalc:
     if sam <= 0:
         raise ValueError(f"SAM must be > 0 for operation {operation!r}")
@@ -58,8 +62,6 @@ def compute_operation(
     manpower_100 = target / shift_target_100
     manpower_eff = target / shift_target_eff if shift_target_eff else 0.0
     head = head_allocated_rule(manpower_eff)
-    work_minutes = target * sam
-    target_per_employee = target / head if head else 0.0
 
     return OperationCalc(
         operation=operation,
@@ -71,14 +73,16 @@ def compute_operation(
         manpower_100=manpower_100,
         manpower_eff=manpower_eff,
         head_allocated=head,
-        work_minutes=work_minutes,
+        work_minutes=target * sam,
         target=target,
-        target_per_employee=target_per_employee,
+        target_per_employee=target / head if head else 0.0,
+        section=section,
+        seq=seq,
     )
 
 
 def compute_ob_table(rows, shift_time: float, target: float, plan_efficiency: float) -> list[OperationCalc]:
-    """rows: iterable of dicts with operation/machine_type/sam/skill_group."""
+    """rows: ordered iterable of dicts with operation/machine_type/sam/skill_group[/section]."""
     return [
         compute_operation(
             operation=r["operation"],
@@ -88,6 +92,8 @@ def compute_ob_table(rows, shift_time: float, target: float, plan_efficiency: fl
             shift_time=shift_time,
             target=target,
             plan_efficiency=plan_efficiency,
+            section=r.get("section") or "",
+            seq=seq,
         )
-        for r in rows
+        for seq, r in enumerate(rows)
     ]
