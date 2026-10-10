@@ -1,11 +1,14 @@
 import streamlit as st
 
-from core.state import init_state, skill_matrix_dict, employee_line_dict, employee_names_dict, list_obs, get_ob, list_lines
-from core.evidence import build_staffing_evidence, diagnose_unstaffed
-from core.orchestrate import run_multi_line
-from core.render import units_to_table, style_table, render_manual_assignment_ui
-from core.importers import read_any
 import core.db as db
+from core.importers import read_any
+from core.orchestrate import run_multi_line
+from core.results import RunResult
+from core.results_view import render_results, store_result
+from core.state import (
+    employee_line_dict, employee_names_dict, employee_skill_profiles, get_ob,
+    init_state, list_lines, list_obs, skill_matrix_dict,
+)
 
 st.set_page_config(page_title="Absentee Balancing", page_icon="🧍", layout="wide")
 init_state()
@@ -22,7 +25,6 @@ if db.list_skill_pairs() is None:
     missing.append("Skill Matrix (Data Import)")
 if not list_lines():
     missing.append("at least one Line (Lines page)")
-
 if missing:
     st.warning("Still needed:\n\n" + "\n".join(f"- {m}" for m in missing))
     st.stop()
@@ -33,20 +35,24 @@ ob_lines = list_lines()
 lines = st.multiselect("Lines", options=ob_lines, default=ob_lines)
 
 all_skill_matrix = skill_matrix_dict(ob_rows=ob["rows"])
-all_evidence = build_staffing_evidence(ob["rows"], all_skill_matrix)
+profiles = employee_skill_profiles(ob_rows=ob["rows"])
 all_employee_line = employee_line_dict()
 employee_names = employee_names_dict()
-all_employees = sorted(all_employee_line.keys())
+all_employees = sorted(all_employee_line)
 
 st.subheader("Who's present today?")
-mode = st.radio("How do you want to mark attendance?", options=["Upload attendance file", "Pick present employees manually"], horizontal=True)
+mode = st.radio(
+    "How do you want to mark attendance?",
+    options=["Upload attendance file", "Pick present employees manually"],
+    horizontal=True,
+)
 
-present = None
+present: set | None = None
 if mode == "Upload attendance file":
     file = st.file_uploader("Upload attendance (.xlsx or .csv) — any column containing the employee ID marks them present", type=["xlsx", "csv"])
     if file:
         raw = read_any(file)
-        st.dataframe(raw.head(10), width='stretch')
+        st.dataframe(raw.head(10), width="stretch")
         id_col = st.selectbox("Which column has the Employee ID?", options=list(raw.columns))
         present = set(raw[id_col].astype(str))
 else:
@@ -54,50 +60,27 @@ else:
 
 if present is not None:
     st.caption(f"{len(present)} employee(s) marked present out of {len(all_employees)} total.")
-
-    evidence = all_evidence.restrict_to(present)
-    employee_line = {e: line for e, line in all_employee_line.items() if e in present}
+    skill_matrix = {e: sgs for e, sgs in all_skill_matrix.items() if e in present}
+    employee_line = {e: ln for e, ln in all_employee_line.items() if e in present}
 
     if st.button("Run Absentee Balancing", type="primary", disabled=len(lines) < 2):
-        rows_by_line = {line: ob["rows"] for line in lines}
         with st.spinner("Balancing across lines with present employees only..."):
-            calcs_by_line, units = run_multi_line(
-                lines, rows_by_line, float(ob["shift_time"]), float(ob["target"]), float(ob["plan_efficiency"]),
-                evidence, employee_line,
+            _, units = run_multi_line(
+                lines, {ln: ob["rows"] for ln in lines},
+                float(ob["shift_time"]), float(ob["target"]), float(ob["plan_efficiency"]),
+                skill_matrix, employee_line,
             )
-        op_lookup = {}
-        for calcs in calcs_by_line.values():
-            op_lookup.update({c.operation: (c.machine_type, c.sam) for c in calcs})
-        st.session_state["ab_result"] = (units, op_lookup, evidence)
-        st.session_state["ab_overrides"] = {}
+        store_result("ab", RunResult(units=units, line_order=lines))
     if len(lines) < 2:
         st.caption("Pick at least two lines.")
 
-result = st.session_state.get("ab_result")
-if result:
-    units, op_lookup, run_evidence = result
-    st.divider()
-
-    overrides = st.session_state.get("ab_overrides") or {}
-    merged = [u for u in units if u.color_key != "unmerged"]
-    cross = [u for u in units if u.cross_line]
-
-    df, color_map = units_to_table(units, op_lookup, employee_names, manual_overrides=overrides)
-
-    still_unstaffed = (df["Employee Code"] == "").sum()
-    if still_unstaffed:
-        st.error(f"{still_unstaffed} assignment(s) still have no employee assigned.")
-        with st.expander("Why are these unstaffed?"):
-            st.dataframe(diagnose_unstaffed(units, op_lookup, run_evidence), width='stretch', hide_index=True)
-    else:
-        st.success("Every operation is staffed with present employees.")
-    st.caption(f"{len(merged)} operator(s) assigned to more than one operation. {len(cross)} working across lines.")
-
-    st.dataframe(style_table(df, color_map), width='stretch', hide_index=True)
-
-    csv = df.drop(columns=["_color_key", "_row_index", "_unit_id"]).to_csv(index=False).encode("utf-8")
-    st.download_button("Download result (CSV)", csv, file_name="absentee_balancing_result.csv", mime="text/csv")
-
-    all_employees_df = db.list_employees()
-    present_employees_df = all_employees_df[all_employees_df["employee_id"].astype(str).isin(present)]
-    render_manual_assignment_ui(df, present_employees_df, "ab_overrides")
+    render_results(
+        prefix="ab",
+        employees_df=db.list_employees(),
+        skill_matrix=skill_matrix,
+        employee_line=employee_line,
+        employee_names=employee_names,
+        profiles=profiles,
+        file_stem="absentee_balancing_result",
+        pool=present,
+    )

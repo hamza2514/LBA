@@ -1,10 +1,17 @@
-import streamlit as st
 import pandas as pd
+import streamlit as st
 
-from core.state import init_state, ensure_lines_registered, extra_taxonomy_list, record_taxonomy_extra_bulk, save_ob, list_obs, get_ob
-from core.importers import read_any, column_mapper, apply_mapping, wide_skill_matrix_to_long, long_skill_file_to_pairs
-from core.matching import get_or_create_skill_group
 import core.db as db
+from core.importers import (
+    apply_mapping, column_mapper, long_skill_file_to_pairs, read_any, read_ob_file,
+    wide_skill_matrix_to_long,
+)
+from core.matching import get_or_create_skill_group
+from core.sections import canonical_section
+from core.state import (
+    ensure_lines_registered, extra_taxonomy_list, get_ob, init_state, list_obs,
+    record_taxonomy_extra_bulk, save_ob,
+)
 
 st.set_page_config(page_title="Data Import", page_icon="📥", layout="wide")
 init_state()
@@ -13,26 +20,37 @@ st.caption("Everything you load here is saved permanently — it will still be h
 
 tab_ob, tab_emp, tab_skill = st.tabs(["Operation Breakdown", "Employees", "Skill Matrix"])
 
+
+def _section_of(value) -> str:
+    return canonical_section(value) if isinstance(value, str) else ""
+
+
 # ---------------- Operation Breakdown ----------------
 with tab_ob:
     st.subheader("Operation Breakdown")
     st.caption(
         "Upload Operation, Machine Type, and SAM/SMV. Skill Group, Shift Target, Manpower, and "
-        "Head Allocated are derived automatically. Line is NOT set here — you'll pick which line(s) "
-        "to run this OB on when you go to Layout Balancing or Absentee Balancing."
+        "Head Allocated are derived automatically. Line sections (Back, Front, Assembly, ...) are "
+        "detected from the file when present — operations are only ever merged within one section. "
+        "Line is NOT set here; you pick it at Layout/Absentee Balancing."
     )
-    file = st.file_uploader("Upload Operation Breakdown (.xlsx, .csv, or .pdf)", type=["xlsx", "csv", "pdf"], key="ob_upload")
+    file = st.file_uploader(
+        "Upload Operation Breakdown (.xlsx, .xlsm, .csv, or .pdf)", type=["xlsx", "xlsm", "csv", "pdf"], key="ob_upload"
+    )
 
     if file:
         try:
-            raw = read_any(file)
+            raw = read_ob_file(file)
         except ValueError as e:
             st.error(str(e))
             raw = None
 
         if raw is not None:
             st.write("Preview:")
-            st.dataframe(raw.head(10), width='stretch')
+            st.dataframe(raw.head(10), width="stretch")
+            if "Section" in raw.columns:
+                counts = raw["Section"].value_counts(sort=False)
+                st.info("Sections detected: " + " · ".join(f"**{s}** ({n})" for s, n in counts.items()))
 
             mapping = column_mapper(
                 raw,
@@ -40,6 +58,7 @@ with tab_ob:
                     "operation": "Operation Description",
                     "machine_type": "Machine Type",
                     "sam": "SAM / SMV",
+                    "section": "Section (optional)",
                 },
                 key_prefix="ob",
             )
@@ -59,19 +78,17 @@ with tab_ob:
             if st.button("Confirm & Save Operation Breakdown", type="primary", disabled=not ob_name):
                 mapped = apply_mapping(raw, mapping)
                 mapped["sam"] = pd.to_numeric(mapped["sam"], errors="coerce").astype(float)
-                bad_sam = mapped["sam"].isna().sum()
-                mapped = mapped.dropna(subset=["sam"])
-                zero_sam = (mapped["sam"] <= 0).sum()
+                total_rows = len(mapped)
                 mapped = mapped[mapped["sam"] > 0]
-                bad_sam += zero_sam
+                skipped = total_rows - len(mapped)
 
                 extra_taxonomy = extra_taxonomy_list()
                 rows = []
-                newly_created = []  # batched to ONE db write at the end, not one per new group
+                newly_created = []  # batched to ONE db write at the end
                 progress = st.progress(0.0, text="Matching operations to skill groups...")
                 total = len(mapped)
                 for i, (_, r) in enumerate(mapped.iterrows()):
-                    sg, created, new_row, score = get_or_create_skill_group(
+                    sg, created, new_row, _score = get_or_create_skill_group(
                         r["operation"], r["machine_type"], r["sam"], extra_taxonomy
                     )
                     if created:
@@ -82,15 +99,20 @@ with tab_ob:
                             "machine_type": new_row["machine_type"],
                             "sam": new_row["sam"],
                         })
-                    rows.append({"operation": r["operation"], "machine_type": r["machine_type"], "sam": r["sam"], "skill_group": sg})
+                    rows.append({
+                        "operation": r["operation"], "machine_type": r["machine_type"],
+                        "sam": r["sam"], "skill_group": sg, "section": _section_of(r["section"]),
+                    })
                     progress.progress((i + 1) / total if total else 1.0, text=f"Matching operations... {i+1}/{total}")
                 progress.empty()
 
                 record_taxonomy_extra_bulk(newly_created)
                 save_ob(ob_name, shift_time, target, plan_efficiency, rows)
                 msg = f"Saved '{ob_name}' — {len(rows)} operations."
-                if bad_sam:
-                    msg += f" {bad_sam} row(s) had a non-numeric or zero SAM and were skipped."
+                if any(r["section"] for r in rows):
+                    msg += f" {len({r['section'] for r in rows if r['section']})} section(s) kept."
+                if skipped:
+                    msg += f" {skipped} row(s) had a non-numeric or zero SAM and were skipped."
                 if newly_created:
                     msg += f" {len(newly_created)} operation(s) didn't match the reference taxonomy, so new Skill Group IDs were created for them."
                 st.success(msg)
@@ -101,8 +123,12 @@ with tab_ob:
         st.caption("Saved Operation Breakdowns:")
         for name in saved_obs:
             ob = get_ob(name)
+            sections = sorted({r["section"] for r in ob["rows"] if r["section"]})
             c1, c2 = st.columns([5, 1])
-            c1.write(f"**{name}** — {len(ob['rows'])} operations, shift={ob['shift_time']}, target={ob['target']}, eff={ob['plan_efficiency']}")
+            c1.write(
+                f"**{name}** — {len(ob['rows'])} operations, shift={ob['shift_time']}, target={ob['target']}, "
+                f"eff={ob['plan_efficiency']}" + (f", sections: {', '.join(sections)}" if sections else "")
+            )
             if c2.button("Delete", key=f"delete_ob_{name}"):
                 db.delete_ob(name)
                 st.rerun()
@@ -115,7 +141,7 @@ with tab_emp:
     if file:
         raw = read_any(file)
         st.write("Preview:")
-        st.dataframe(raw.head(10), width='stretch')
+        st.dataframe(raw.head(10), width="stretch")
 
         mapping = column_mapper(
             raw,
@@ -137,7 +163,7 @@ with tab_emp:
     if current is not None:
         st.divider()
         st.caption(f"Currently saved: {len(current)} employees.")
-        st.dataframe(current, width='stretch')
+        st.dataframe(current, width="stretch")
 
 # ---------------- Skill Matrix ----------------
 with tab_skill:
@@ -151,7 +177,7 @@ with tab_skill:
     if file:
         raw = read_any(file)
         st.write("Preview:")
-        st.dataframe(raw.head(10), width='stretch')
+        st.dataframe(raw.head(10), width="stretch")
 
         file_format = st.radio(
             "Which format is this file?",
@@ -163,7 +189,6 @@ with tab_skill:
             key="skill_format",
         )
 
-        pairs = None
         if file_format == "wide":
             c1, c2 = st.columns(2)
             with c1:
@@ -192,10 +217,7 @@ with tab_skill:
                 mt_col = st.selectbox("Which column is Machine Type? (optional, but improves matching a lot)", options=mt_options, key="skill_mt_col_long")
             if st.button("Preview conversion", key="skill_long_preview"):
                 pairs = long_skill_file_to_pairs(raw, emp_col, skill_col)
-                if mt_col != "(none)":
-                    pairs["machine_type"] = raw.loc[pairs.index, mt_col] if mt_col in raw.columns else None
-                else:
-                    pairs["machine_type"] = None
+                pairs["machine_type"] = raw.loc[pairs.index, mt_col] if mt_col != "(none)" else None
                 st.session_state["skill_pairs_preview"] = pairs
 
         pairs = st.session_state.get("skill_pairs_preview")
@@ -204,7 +226,7 @@ with tab_skill:
             if st.button("Confirm & Save Skill Matrix", type="primary"):
                 extra_taxonomy = extra_taxonomy_list()
                 cache: dict = {}
-                newly_created = []  # batched to ONE db write at the end
+                newly_created = []
                 resolved_sg = []
                 progress = st.progress(0.0, text="Matching skill names to skill groups...")
                 total = len(pairs)
@@ -213,7 +235,7 @@ with tab_skill:
                     mt = r.get("machine_type")
                     cache_key = (text, mt)
                     if cache_key not in cache:
-                        sg, created, new_row, score = get_or_create_skill_group(text, mt, None, extra_taxonomy)
+                        sg, created, new_row, _score = get_or_create_skill_group(text, mt, None, extra_taxonomy)
                         if created:
                             extra_taxonomy.append(new_row)
                             newly_created.append({
@@ -229,7 +251,6 @@ with tab_skill:
                 progress.empty()
 
                 record_taxonomy_extra_bulk(newly_created)
-                new_count = len(newly_created)
 
                 pairs = pairs.copy()
                 pairs["skill_group"] = resolved_sg
@@ -244,8 +265,8 @@ with tab_skill:
                 )
                 if dup_count:
                     msg += f" {dup_count} duplicate (employee, skill) row(s) in this file were collapsed (kept the last one) — worth checking your source file for repeated entries."
-                if new_count:
-                    msg += f" {new_count} skill name(s) didn't match the reference taxonomy, so new Skill Group IDs were created for them."
+                if newly_created:
+                    msg += f" {len(newly_created)} skill name(s) didn't match the reference taxonomy, so new Skill Group IDs were created for them."
                 st.success(msg)
                 st.session_state["skill_pairs_preview"] = None
 
@@ -259,4 +280,4 @@ with tab_skill:
             if st.button("Clear all", key="clear_skill_matrix"):
                 db.clear_skill_matrix()
                 st.rerun()
-        st.dataframe(current, width='stretch')
+        st.dataframe(current, width="stretch")
