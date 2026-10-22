@@ -22,6 +22,7 @@ SYSTEM, MANUAL = "System", "Manual"
 class RunResult:
     units: list
     line_order: list[str]
+    context: object = None  # core.context.RunContext used for this run
 
 
 @dataclass(frozen=True)
@@ -35,16 +36,17 @@ class ResultRow:
     skill_group: str
     target: float
     system_employee: str
+    basis: str = ""
     suggestions: tuple[str, ...] = field(default_factory=tuple)
 
 
 def build_rows(
     units: list,
     line_order: list[str],
-    suggest: Callable[[str, str], list[str]],
+    suggest: Callable[[str, str, str], list[str]],
 ) -> list[ResultRow]:
     """One row per operation assignment, ordered line by line in OB sequence.
-    suggest(skill_group, line) -> ordered candidate employee codes."""
+    suggest(skill_group, line, machine_type) -> ordered candidate employee codes."""
     counters: dict[tuple, int] = {}
     rows = []
     for unit in units:
@@ -57,7 +59,8 @@ def build_rows(
                     machine_type=op.machine_type or "", sam=op.sam,
                     skill_group=op.skill_group, target=op.target,
                     system_employee=unit.employee or "",
-                    suggestions=tuple(suggest(op.skill_group, op.line)),
+                    basis=unit.basis if unit.employee else "",
+                    suggestions=tuple(suggest(op.skill_group, op.line, op.machine_type or "")),
                 )
             )
     line_rank = {line: i for i, line in enumerate(line_order)}
@@ -109,7 +112,7 @@ def effective_records(
             "Employee Code": code,
             "Employee Name": names.get(code, "") if code else "",
             "Target": round(r.target),
-            "Assigned By": SYSTEM if code == r.system_employee else MANUAL,
+            "Assigned By": (r.basis or SYSTEM) if code == r.system_employee else MANUAL,
             "_color": colors.get(code),
         })
     return records

@@ -6,6 +6,7 @@ from __future__ import annotations
 import streamlit as st
 
 from core.export import to_excel_bytes
+from core.evidence import diagnose_unstaffed
 from core.results import (
     PALETTE, ResultRow, RunResult, build_rows, effective_records,
     employee_payload, reconcile, summarize,
@@ -20,10 +21,30 @@ def store_result(prefix: str, result: RunResult) -> None:
     st.session_state[f"{prefix}_run"] = st.session_state.get(f"{prefix}_run", 0) + 1
 
 
-def _suggester(skill_matrix: dict, employee_line: dict, pool: set | None):
-    def suggest(skill_group: str, line: str) -> list[str]:
-        qualified = [e for e, sgs in skill_matrix.items() if skill_group in sgs and (pool is None or e in pool)]
-        return sorted(qualified, key=lambda e: (employee_line.get(e) != line, e))
+_MAX_SUGGESTIONS = 40
+
+
+def _suggester(evidence, employee_line: dict, pool):
+    """Ordered candidates per operation: skilled, then partial, then related
+    wording (strongest first), then machine-experienced; same line first."""
+    from core.staffing import normalize_machine
+
+    def suggest(skill_group: str, line: str, machine: str) -> list[str]:
+        def on_line_first(emps) -> list[str]:
+            return sorted(emps, key=lambda e: (employee_line.get(e) != line, e))
+
+        ordered: list[str] = []
+        related = evidence.related.get(skill_group, {})
+        tiers = (
+            on_line_first(evidence.strong.get(skill_group, ())),
+            on_line_first(evidence.partial.get(skill_group, ())),
+            sorted(related, key=lambda e: (-related[e], employee_line.get(e) != line, e)),
+            on_line_first(evidence.machine_candidates({normalize_machine(machine)})),
+        )
+        for tier in tiers:
+            ordered.extend(e for e in tier if e not in ordered and (pool is None or e in pool))
+        return ordered[:_MAX_SUGGESTIONS]
+
     return suggest
 
 
@@ -31,27 +52,18 @@ def _component_row(r: ResultRow) -> dict:
     return {
         "id": r.id, "line": r.line, "operation": r.operation, "machine": r.machine_type,
         "sam": round(r.sam, 4), "target": round(r.target), "sg": r.skill_group,
-        "sys": r.system_employee, "suggest": list(r.suggestions),
+        "sys": r.system_employee, "basis": r.basis, "suggest": list(r.suggestions),
     }
 
 
-def render_results(
-    *,
-    prefix: str,
-    employees_df,
-    skill_matrix: dict,
-    employee_line: dict,
-    employee_names: dict,
-    profiles: dict,
-    file_stem: str,
-    pool: set | None = None,
-) -> None:
-    """pool: employee codes allowed in the dropdown (None = everyone)."""
+def render_results(*, prefix: str, employees_df, file_stem: str) -> None:
+    """Renders the result of the last run stored under `prefix`."""
     result: RunResult | None = st.session_state.get(f"{prefix}_result")
     if not result:
         return
+    ctx = result.context
 
-    rows = build_rows(result.units, result.line_order, _suggester(skill_matrix, employee_line, pool))
+    rows = build_rows(result.units, result.line_order, _suggester(ctx.evidence, ctx.employee_line, ctx.pool))
     order, assign = reconcile(rows, st.session_state.get(f"{prefix}_overrides"))
 
     st.divider()
@@ -63,7 +75,7 @@ def render_results(
         rows=[_component_row(r) for r in rows],
         order=order,
         assign=assign,
-        employees=employee_payload(employees_df, profiles, {r.skill_group for r in rows}, pool),
+        employees=employee_payload(employees_df, ctx.profiles, {r.skill_group for r in rows}, ctx.pool),
         palette=PALETTE,
     )
     if value:
@@ -71,7 +83,7 @@ def render_results(
         st.session_state[f"{prefix}_overrides"] = state
         order, assign = reconcile(rows, state)
 
-    records = effective_records(rows, order, assign, employee_names)
+    records = effective_records(rows, order, assign, ctx.employee_names)
     stats = summarize(records)
     with summary:
         cols = st.columns(5)
@@ -84,6 +96,12 @@ def render_results(
             st.error(f"{stats['unassigned']} operation(s) still have no employee assigned.")
         else:
             st.success("Every operation is staffed.")
+
+    diagnosis = diagnose_unstaffed(result.units, ctx.evidence)
+    if not diagnosis.empty:
+        with st.expander(f"Why are {len(diagnosis)} operation(s) unstaffed by the system?"):
+            st.caption("free/total = people with that level of evidence who were still available / in total.")
+            st.dataframe(diagnosis, width="stretch", hide_index=True)
 
     st.download_button(
         "⬇️ Download Excel",

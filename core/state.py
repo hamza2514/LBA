@@ -146,10 +146,15 @@ def _role_grants(ob_rows: list | None) -> dict:
 
 
 def skill_matrix_dict(ob_rows: list | None = None) -> dict:
-    """{employee: set(skill_group)} from explicit skill-matrix entries plus Roles."""
+    """{employee: set(skill_group)} from explicit skill-matrix entries, wording-based
+    inference (near-matches, compound operations) and Roles."""
+    from core.inference import infer_qualifications
+
     out: dict = {}
     for emp, _, sg in _resolved_skill_rows(ob_rows):
         out.setdefault(emp, set()).add(sg)
+    for emp, sgs in infer_qualifications(ob_rows or [], db.list_skill_pairs()).items():
+        out.setdefault(emp, set()).update(sgs)
     for emp, by_sg in _role_grants(ob_rows).items():
         out.setdefault(emp, set()).update(by_sg)
     return out

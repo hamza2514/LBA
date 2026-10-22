@@ -79,27 +79,26 @@ def build_staffing_evidence(ob_rows: list[dict], skill_matrix: dict) -> Staffing
     )
 
 
-def diagnose_unstaffed(units: list, op_lookup: dict, evidence: StaffingEvidence):
+def diagnose_unstaffed(units: list, evidence: StaffingEvidence):
     """One row per unstaffed operation explaining how much evidence existed
     and how much of it was already used elsewhere."""
     import pandas as pd
 
     used = {u.employee for u in units if u.employee}
     rows = []
-    for u in units:
-        if u.employee:
+    for unit in units:
+        if unit.employee:
             continue
-        for (line, operation, skill_group, _minutes, _target) in u.operations:
-            machine, _sam = op_lookup.get(operation, ("", None))
-            strong = set(evidence.strong.get(skill_group, ()))
-            partial = set(evidence.partial.get(skill_group, ()))
-            related = set(evidence.related.get(skill_group, {}))
-            experienced = evidence.machine_candidates({normalize_machine(machine)})
+        for op in unit.operations:
+            strong = set(evidence.strong.get(op.skill_group, ()))
+            partial = set(evidence.partial.get(op.skill_group, ()))
+            related = set(evidence.related.get(op.skill_group, {}))
+            experienced = evidence.machine_candidates({normalize_machine(op.machine_type)})
             rows.append(
                 {
-                    "Line": line,
-                    "Operation": operation,
-                    "Machine Type": machine,
+                    "Line": op.line,
+                    "Operation": op.operation,
+                    "Machine Type": op.machine_type,
                     "Skilled (free/total)": f"{len(strong - used)}/{len(strong)}",
                     "Partial (free/total)": f"{len(partial - used)}/{len(partial)}",
                     "Related (free/total)": f"{len(related - used)}/{len(related)}",
