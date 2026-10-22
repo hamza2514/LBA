@@ -1,13 +1,11 @@
 import streamlit as st
 
 import core.db as db
+from core.context import build_context
 from core.orchestrate import run_multi_line, run_single_line
 from core.results import RunResult
 from core.results_view import render_results, store_result
-from core.state import (
-    employee_line_dict, employee_names_dict, employee_skill_profiles, get_ob,
-    init_state, list_lines, list_obs, skill_matrix_dict,
-)
+from core.state import get_ob, init_state, list_lines, list_obs
 
 st.set_page_config(page_title="Layout Balancing", page_icon="⚖️", layout="wide")
 init_state()
@@ -32,11 +30,6 @@ ob_name = st.selectbox("Operation Breakdown", options=obs)
 ob = get_ob(ob_name)
 ob_lines = list_lines()
 
-skill_matrix = skill_matrix_dict(ob_rows=ob["rows"])
-profiles = employee_skill_profiles(ob_rows=ob["rows"])
-employee_line = employee_line_dict()
-employee_names = employee_names_dict()
-
 c1, c2, c3 = st.columns(3)
 with c1:
     shift_time = st.number_input("Shift Time (minutes)", min_value=1.0, value=float(ob["shift_time"]), key="lb_shift")
@@ -50,25 +43,22 @@ if mode == "Single Line":
     line = st.selectbox("Line", options=ob_lines)
     if st.button("Run Layout Balancing", type="primary"):
         with st.spinner("Balancing..."):
-            _, units = run_single_line(line, ob["rows"], shift_time, target, plan_efficiency, skill_matrix, employee_line)
-        store_result("lb", RunResult(units=units, line_order=[line]))
+            ctx = build_context(ob["rows"])
+            _, units = run_single_line(
+                line, ob["rows"], shift_time, target, plan_efficiency, ctx.evidence, ctx.employee_line
+            )
+        store_result("lb", RunResult(units=units, line_order=[line], context=ctx))
 else:
     lines = st.multiselect("Lines", options=ob_lines, default=ob_lines)
     if st.button("Run Layout Balancing", type="primary", disabled=len(lines) < 2):
         with st.spinner("Balancing across lines..."):
+            ctx = build_context(ob["rows"])
             _, units = run_multi_line(
-                lines, {ln: ob["rows"] for ln in lines}, shift_time, target, plan_efficiency, skill_matrix, employee_line
+                lines, {ln: ob["rows"] for ln in lines}, shift_time, target, plan_efficiency,
+                ctx.evidence, ctx.employee_line,
             )
-        store_result("lb", RunResult(units=units, line_order=lines))
+        store_result("lb", RunResult(units=units, line_order=lines, context=ctx))
     if len(lines) < 2:
         st.caption("Pick at least two lines for multi-line balancing.")
 
-render_results(
-    prefix="lb",
-    employees_df=db.list_employees(),
-    skill_matrix=skill_matrix,
-    employee_line=employee_line,
-    employee_names=employee_names,
-    profiles=profiles,
-    file_stem="layout_balancing_result",
-)
+render_results(prefix="lb", employees_df=db.list_employees(), file_stem="layout_balancing_result")

@@ -1,14 +1,12 @@
 import streamlit as st
 
 import core.db as db
+from core.context import build_context
 from core.importers import read_any
 from core.orchestrate import run_multi_line
 from core.results import RunResult
 from core.results_view import render_results, store_result
-from core.state import (
-    employee_line_dict, employee_names_dict, employee_skill_profiles, get_ob,
-    init_state, list_lines, list_obs, skill_matrix_dict,
-)
+from core.state import employee_line_dict, get_ob, init_state, list_lines, list_obs
 
 st.set_page_config(page_title="Absentee Balancing", page_icon="🧍", layout="wide")
 init_state()
@@ -34,11 +32,7 @@ ob = get_ob(ob_name)
 ob_lines = list_lines()
 lines = st.multiselect("Lines", options=ob_lines, default=ob_lines)
 
-all_skill_matrix = skill_matrix_dict(ob_rows=ob["rows"])
-profiles = employee_skill_profiles(ob_rows=ob["rows"])
-all_employee_line = employee_line_dict()
-employee_names = employee_names_dict()
-all_employees = sorted(all_employee_line)
+all_employees = sorted(employee_line_dict())
 
 st.subheader("Who's present today?")
 mode = st.radio(
@@ -60,27 +54,17 @@ else:
 
 if present is not None:
     st.caption(f"{len(present)} employee(s) marked present out of {len(all_employees)} total.")
-    skill_matrix = {e: sgs for e, sgs in all_skill_matrix.items() if e in present}
-    employee_line = {e: ln for e, ln in all_employee_line.items() if e in present}
 
     if st.button("Run Absentee Balancing", type="primary", disabled=len(lines) < 2):
         with st.spinner("Balancing across lines with present employees only..."):
+            ctx = build_context(ob["rows"], present=present)
             _, units = run_multi_line(
                 lines, {ln: ob["rows"] for ln in lines},
                 float(ob["shift_time"]), float(ob["target"]), float(ob["plan_efficiency"]),
-                skill_matrix, employee_line,
+                ctx.evidence, ctx.employee_line,
             )
-        store_result("ab", RunResult(units=units, line_order=lines))
+        store_result("ab", RunResult(units=units, line_order=lines, context=ctx))
     if len(lines) < 2:
         st.caption("Pick at least two lines.")
 
-    render_results(
-        prefix="ab",
-        employees_df=db.list_employees(),
-        skill_matrix=skill_matrix,
-        employee_line=employee_line,
-        employee_names=employee_names,
-        profiles=profiles,
-        file_stem="absentee_balancing_result",
-        pool=present,
-    )
+    render_results(prefix="ab", employees_df=db.list_employees(), file_stem="absentee_balancing_result")
