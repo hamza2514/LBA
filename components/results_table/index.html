@@ -23,7 +23,7 @@
   .emp:hover { border-color:var(--accent); }
   .emp.empty { color:#b91c1c; border-color:#fecaca; background:#fef2f2; }
   .emp .chev { color:#94a3b8; font-size:10px; }
-  .pill { display:inline-block; padding:2px 9px; border-radius:999px; font-size:11px; font-weight:600; }
+  .pill { display:inline-block; white-space:nowrap; padding:2px 9px; border-radius:999px; font-size:11px; font-weight:600; }
   .pill.System { background:#dbeafe; color:#1d4ed8; }
   .pill.Manual { background:#fef3c7; color:#b45309; }
   #pop { position:fixed; z-index:50; width:380px; max-height:340px; background:#fff; border:1px solid #cbd5e1; border-radius:12px; box-shadow:0 12px 32px rgba(15,23,42,.18); display:none; flex-direction:column; overflow:hidden; }
@@ -100,7 +100,7 @@
         `<td class="num">${esc(r.sam)}</td>` +
         `<td><div class="emp ${code ? "" : "empty"}" data-pick="${esc(id)}"><span>${code ? esc(code) : "Unassigned"}</span><span class="chev">▼</span></div></td>` +
         `<td>${e ? esc(e.name) : (code ? esc(code) : "")}</td><td class="num">${esc(r.target)}</td>` +
-        `<td><span class="pill ${manual ? "Manual" : "System"}">${manual ? "Manual" : "System"}</span></td>`;
+        `<td><span class="pill ${manual ? "Manual" : "System"}">${manual ? "Manual" : (r.basis || "System")}</span></td>`;
       tb.appendChild(tr);
 
       const h = tr.querySelector(".handle");
