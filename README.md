@@ -44,7 +44,15 @@ core/
   pooling.py                   The 50%-under-utilization / overflow merge (pooling) logic
   assignment.py                Turns pooling bins + standalone ops into named, line-aware employee assignments
   orchestrate.py               Ties formulas+pooling+assignment into one balancing run
-  render.py                    Builds the color-coded results table + manual-assignment UI
+  sections.py                  Canonical line-section names (Small Parts, Back, Front, Assembly...)
+  staffing.py                  StaffingEvidence: strong / partial / related / machine evidence per skill group
+  decompose.py                 Splits compound operations ("A & B") into components
+  inference.py                 Wording-based qualification inference (near-match, composition, related)
+  evidence.py                  Builds StaffingEvidence from the DB; explains unstaffed operations
+  context.py                   Per-run people context (evidence, profiles, lines, names)
+  results.py / results_view.py Result-table model + shared result UI (drag, searchable picker, Excel)
+  table_component.py / export.py / ui.py
+test/                          pytest suite (run `pytest` from the repo root)
   importers.py                 Generic file reading (xlsx/csv/pdf) + column-mapping UI + skill-matrix format handling
   state.py                     Thin, DB-backed data-access layer pages call into
 data/
