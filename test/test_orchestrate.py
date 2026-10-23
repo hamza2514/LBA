@@ -47,3 +47,19 @@ def test_multi_line_uses_each_person_once():
     _, units = run_multi_line(["L1", "L2"], {"L1": OB, "L2": OB}, 480, 480, 1.0, _evidence(), {})
     people = [u.employee for u in units if u.employee]
     assert len(people) == len(set(people))
+
+
+def test_operations_never_merge_across_sections_or_without_a_section():
+    rows = [
+        {"operation": "X", "machine_type": "SNLS", "sam": 0.1, "skill_group": "SG-1", "section": "Small Parts"},
+        {"operation": "Y", "machine_type": "SNLS", "sam": 0.1, "skill_group": "SG-1", "section": "Dispatch"},
+        {"operation": "Z", "machine_type": "SNLS", "sam": 0.1, "skill_group": "SG-1", "section": ""},
+        {"operation": "W", "machine_type": "SNLS", "sam": 0.1, "skill_group": "SG-1", "section": ""},
+    ]
+    ev = StaffingEvidence(strong={"SG-1": {"E1", "E2", "E3", "E4"}})
+    _, units = run_single_line("L1", rows, 480, 1000, 1.0, ev, {})
+    assert all(len(u.operations) == 1 for u in units)
+    _, units = run_multi_line(["L1", "L2"], {"L1": rows, "L2": rows}, 480, 1000, 1.0, ev, {})
+    for u in units:  # cross-line pairs are allowed, but only inside one real section
+        sections = {op.section for op in u.operations}
+        assert len(sections) == 1 and (len(u.operations) == 1 or "" not in sections)
