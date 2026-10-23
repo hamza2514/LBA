@@ -87,8 +87,9 @@ def _fits(bin_: Bin, chunk: Chunk, shift_time: float) -> bool:
 
 
 def _compatible(bin_: Bin, chunk: Chunk) -> str | None:
-    """'skill' (priority 1), 'machine' (priority 2) or None. Never across sections."""
-    if chunk.section != bin_.section:
+    """'skill' (priority 1), 'machine' (priority 2) or None. Never across sections;
+    an operation with no known section is never merged."""
+    if not chunk.section or chunk.section != bin_.section:
         return None
     if chunk.skill_group and chunk.skill_group in bin_.skill_groups:
         return "skill"
@@ -124,7 +125,7 @@ def pack_multi_line(chunks_by_line: dict, shift_time: float) -> list[Bin]:
     by_skill: dict[tuple, list[Chunk]] = {}
     for chunks in chunks_by_line.values():
         for c in chunks:
-            if c.skill_group:
+            if c.skill_group and c.section:
                 by_skill.setdefault((c.skill_group, c.section), []).append(c)
 
     for group in by_skill.values():
