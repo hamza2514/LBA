@@ -5,6 +5,7 @@ from core.context import build_context
 from core.orchestrate import run_multi_line, run_single_line
 from core.results import RunResult
 from core.results_view import render_results, store_result
+from core.ui import warn_missing_sections
 from core.state import get_ob, init_state, list_lines, list_obs
 
 st.set_page_config(page_title="Layout Balancing", page_icon="⚖️", layout="wide")
@@ -28,6 +29,7 @@ if missing:
 mode = st.radio("Mode", options=["Single Line", "Multiple Lines"], horizontal=True)
 ob_name = st.selectbox("Operation Breakdown", options=obs)
 ob = get_ob(ob_name)
+warn_missing_sections(ob["rows"])
 ob_lines = list_lines()
 
 c1, c2, c3 = st.columns(3)
