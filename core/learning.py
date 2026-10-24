@@ -28,14 +28,23 @@ def learned_qualifications(rows: list[ResultRow], assign: dict[str, str]) -> lis
     ]
 
 
-def operation_order(rows: list[ResultRow], order: list[str], ob_row_ids: list[int]) -> list[int]:
-    """OB row ids in the user's arranged sequence (first appearance of each
-    operation wins; operations not shown keep their place at the end)."""
-    seq_of = {r.id: r.seq for r in rows}
-    seqs: list[int] = []
-    for row_id in order:
-        seq = seq_of.get(row_id)
-        if seq is not None and seq not in seqs and 0 <= seq < len(ob_row_ids):
-            seqs.append(seq)
-    seqs += [s for s in range(len(ob_row_ids)) if s not in seqs]
-    return [ob_row_ids[s] for s in seqs]
+def operation_order(rows: list[ResultRow], order: list[str], ids_by_line: dict[str, list[int]]) -> list[int]:
+    """OB row ids in the user's arranged sequence, per line's Operation
+    Breakdown (first appearance of each operation wins; operations not shown
+    keep their place at the end). A style used on several lines is ordered
+    once, by the first line."""
+    place = {r.id: (r.line, r.seq) for r in rows}
+    result: list[int] = []
+    handled: set = set()
+    for line, ids in ids_by_line.items():
+        if tuple(ids) in handled:
+            continue
+        handled.add(tuple(ids))
+        seqs: list[int] = []
+        for row_id in order:
+            row_line, seq = place.get(row_id, (None, -1))
+            if row_line == line and seq not in seqs and 0 <= seq < len(ids):
+                seqs.append(seq)
+        seqs += [s for s in range(len(ids)) if s not in seqs]
+        result += [ids[s] for s in seqs]
+    return result

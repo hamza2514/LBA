@@ -67,7 +67,7 @@ def _learn_button(prefix: str, result: RunResult, rows, order, assign) -> None:
         return
     learned = learn_assignments(learned_qualifications(rows, assign))
     new_order = operation_order(rows, order, result.ob_row_ids)
-    order_changed = new_order != result.ob_row_ids
+    order_changed = new_order != operation_order(rows, [], result.ob_row_ids)
     if order_changed:
         save_ob_order(new_order)
     st.success(

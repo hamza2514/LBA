@@ -1,7 +1,8 @@
 """
 Ties formulas + pooling + assignment together into the balancing runs:
   - run_single_line()   single-line Layout Balancing
-  - run_multi_line()    multi-line Layout Balancing (Absentee Balancing calls
+  - run_multi_line()    multi-line Layout Balancing - each line may run its own style
+                        (OB), target and efficiency (Absentee Balancing calls
                         this with evidence restricted to present employees)
 """
 from __future__ import annotations
@@ -37,17 +38,24 @@ def run_single_line(
     return calcs, units
 
 
+def _for_line(value, line: str) -> float:
+    """A run-wide number, or a {line: number} mapping for per-line values."""
+    return value[line] if isinstance(value, dict) else value
+
+
 def run_multi_line(
     lines: list[str],
     ob_rows_by_line: dict,
     shift_time: float,
-    target: float,
-    plan_efficiency: float,
+    target: float | dict,
+    plan_efficiency: float | dict,
     evidence: StaffingEvidence,
     employee_line: dict,
 ) -> tuple[dict, list[AssignedUnit]]:
     calcs_by_line = {
-        line: compute_ob_table(ob_rows_by_line[line], shift_time, target, plan_efficiency)
+        line: compute_ob_table(
+            ob_rows_by_line[line], shift_time, _for_line(target, line), _for_line(plan_efficiency, line)
+        )
         for line in lines
     }
     chunks_by_line = {line: identify_chunks(line, calcs, shift_time) for line, calcs in calcs_by_line.items()}

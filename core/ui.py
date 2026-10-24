@@ -24,13 +24,14 @@ def apply_theme() -> None:
     st.markdown(_CSS, unsafe_allow_html=True)
 
 
-def warn_missing_sections(ob_rows: list[dict]) -> None:
+def warn_missing_sections(ob_rows: list[dict], name: str = "") -> None:
     """Operations without a section are never merged — tell the user why."""
+    prefix = f"'{name}': " if name else ""
     missing = sum(1 for r in ob_rows if not r.get("section"))
     if not missing:
         return
     if missing == len(ob_rows):
-        st.warning("This Operation Breakdown has no line sections, so no operations will be merged. "
+        st.warning(prefix + "This Operation Breakdown has no line sections, so no operations will be merged. "
                    "Re-import it from the original file (Data Import) so sections are detected.")
     else:
-        st.warning(f"{missing} operation(s) have no section and will not be merged with others.")
+        st.warning(f"{prefix}{missing} operation(s) have no section and will not be merged with others.")
