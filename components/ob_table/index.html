@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<style>
+  :root { --ink:#0f172a; --muted:#64748b; --line:#e2e8f0; --accent:#2563eb; }
+  * { box-sizing: border-box; }
+  body { margin:0; font-family:-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif; color:var(--ink); font-size:13px; background:transparent; }
+  .wrap { border:1px solid var(--line); border-radius:12px; overflow:auto; max-height:680px; background:#fff; box-shadow:0 1px 2px rgba(15,23,42,.04); }
+  table { border-collapse:separate; border-spacing:0; width:100%; }
+  thead th { position:sticky; top:0; z-index:2; background:#0f172a; color:#fff; text-align:left; font-weight:600; padding:10px; font-size:12px; white-space:nowrap; }
+  tbody td { padding:7px 10px; border-bottom:1px solid var(--line); background:#fff; vertical-align:middle; }
+  tbody tr:hover td { background:#f8fafc; }
+  td.num, th.num { text-align:right; }
+  .handle { cursor:grab; color:#94a3b8; font-size:16px; user-select:none; width:26px; text-align:center; padding:0 4px; }
+  .handle:active { cursor:grabbing; }
+  tr.dragging td { opacity:.4; }
+  tr.drop-before td { box-shadow: inset 0 2px 0 var(--accent); }
+  tr.drop-after td { box-shadow: inset 0 -2px 0 var(--accent); }
+</style>
+</head>
+<body>
+<div class="wrap" id="wrap"><table><thead id="head"></thead><tbody id="body"></tbody></table></div>
+<script>
+(function () {
+  const $ = (id) => document.getElementById(id);
+  let lastSig = "", columns = [], rows = {}, order = [], dragId = null, dropTarget = null, dropPos = "before";
+
+  const post = (type, extra) => window.parent.postMessage(Object.assign({ isStreamlitMessage: true, type }, extra), "*");
+  const esc = (s) => String(s == null ? "" : s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+
+  window.addEventListener("message", (e) => {
+    if (!e.data || e.data.type !== "streamlit:render") return;
+    const args = e.data.args, sig = JSON.stringify(args);
+    if (sig === lastSig) return;
+    lastSig = sig;
+    columns = args.columns; rows = {}; args.rows.forEach((r) => (rows[r.id] = r)); order = args.order.slice();
+    render();
+  });
+  post("streamlit:componentReady", { apiVersion: 1 });
+
+  function render() {
+    $("head").innerHTML = "<tr><th></th><th class='num'>Sr#</th>" +
+      columns.map((c) => `<th class="${c.num ? "num" : ""}">${esc(c.label)}</th>`).join("") + "</tr>";
+    const tb = $("body"); tb.innerHTML = "";
+    order.forEach((id, i) => {
+      const r = rows[id], tr = document.createElement("tr");
+      tr.innerHTML = `<td class="handle" draggable="true" title="Drag to reorder">⠿</td><td class="num">${i + 1}</td>` +
+        columns.map((c) => `<td class="${c.num ? "num" : ""}">${esc(r[c.key])}</td>`).join("");
+      tb.appendChild(tr);
+      const h = tr.querySelector(".handle");
+      h.addEventListener("dragstart", (ev) => { dragId = id; tr.classList.add("dragging"); ev.dataTransfer.effectAllowed = "move"; ev.dataTransfer.setData("text/plain", String(id)); });
+      h.addEventListener("dragend", () => { dragId = null; clearMarks(); tr.classList.remove("dragging"); });
+      tr.addEventListener("dragover", (ev) => {
+        if (dragId === null || dragId === id) return;
+        ev.preventDefault();
+        const rect = tr.getBoundingClientRect();
+        dropPos = ev.clientY < rect.top + rect.height / 2 ? "before" : "after";
+        dropTarget = id; clearMarks(); tr.classList.add("drop-" + dropPos);
+      });
+      tr.addEventListener("drop", (ev) => { ev.preventDefault(); if (dragId !== null && dropTarget !== null) move(dragId, dropTarget, dropPos); });
+    });
+    post("streamlit:setFrameHeight", { height: Math.max(Math.min($("wrap").scrollHeight, 680) + 12, 200) });
+  }
+
+  function clearMarks() { document.querySelectorAll(".drop-before,.drop-after").forEach((n) => n.classList.remove("drop-before", "drop-after")); }
+  function move(from, to, pos) {
+    order = order.filter((x) => x !== from);
+    const i = order.indexOf(to);
+    order.splice(pos === "before" ? i : i + 1, 0, from);
+    dragId = null; clearMarks(); render();
+    post("streamlit:setComponentValue", { value: { order: order.slice() }, dataType: "json" });
+  }
+})();
+</script>
+</body>
+</html>
