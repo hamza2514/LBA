@@ -23,6 +23,8 @@ class RunResult:
     units: list
     line_order: list[str]
     context: object = None  # core.context.RunContext used for this run
+    ob_name: str = ""
+    ob_row_ids: list = field(default_factory=list)  # db ids of the OB rows, by sequence
 
 
 @dataclass(frozen=True)

@@ -42,6 +42,18 @@ CREATE TABLE IF NOT EXISTS ob_rows (
 
 ALTER TABLE ob_rows ADD COLUMN IF NOT EXISTS section TEXT NOT NULL DEFAULT '';
 
+ALTER TABLE ob_rows ADD COLUMN IF NOT EXISTS position INTEGER;
+
+CREATE TABLE IF NOT EXISTS learned_skills (
+    employee TEXT NOT NULL,
+    skill_text TEXT NOT NULL,
+    machine_type TEXT NOT NULL DEFAULT '',
+    skill_group TEXT NOT NULL,
+    times INTEGER NOT NULL DEFAULT 1,
+    updated_at TIMESTAMPTZ DEFAULT now(),
+    PRIMARY KEY (employee, skill_text, machine_type)
+);
+
 CREATE TABLE IF NOT EXISTS employees (
     employee_id TEXT PRIMARY KEY,
     employee_name TEXT,
@@ -171,7 +183,10 @@ def get_ob(name: str) -> dict | None:
         if not meta:
             return None
         rows = conn.execute(
-            text("SELECT operation, machine_type, sam, skill_group, section FROM ob_rows WHERE ob_name = :n ORDER BY id"),
+            text(
+                "SELECT operation, machine_type, sam, skill_group, section, id FROM ob_rows "
+                "WHERE ob_name = :n ORDER BY COALESCE(position, id), id"
+            ),
             {"n": name},
         ).fetchall()
     return {
@@ -179,10 +194,19 @@ def get_ob(name: str) -> dict | None:
         "target": meta[1],
         "plan_efficiency": meta[2],
         "rows": [
-            {"operation": r[0], "machine_type": r[1], "sam": r[2], "skill_group": r[3], "section": r[4] or ""}
+            {"id": r[5], "operation": r[0], "machine_type": r[1], "sam": r[2], "skill_group": r[3], "section": r[4] or ""}
             for r in rows
         ],
     }
+
+
+def save_ob_order(row_ids: list[int]):
+    """Persists a new operation sequence (row ids in their new order)."""
+    if row_ids:
+        _bulk_execute(
+            "UPDATE ob_rows AS t SET position = v.pos FROM (VALUES %s) AS v(id, pos) WHERE t.id = v.id",
+            [(int(i), pos) for pos, i in enumerate(row_ids)],
+        )
 
 
 def delete_ob(name: str):
@@ -235,6 +259,19 @@ def add_skill_pairs(df: pd.DataFrame) -> int:
         [(r["employee"], r["skill_text"], r.get("machine_type"), r["skill_group"]) for _, r in df.iterrows()],
     )
     return before - len(df)
+
+
+def list_effective_skill_pairs() -> pd.DataFrame | None:
+    """Uploaded skill matrix plus everything the app has learned from the user."""
+    with get_engine().connect() as conn:
+        rows = conn.execute(
+            text(
+                "SELECT employee, skill_text, machine_type, skill_group FROM skill_matrix "
+                "UNION ALL "
+                "SELECT employee, skill_text, NULLIF(machine_type, ''), skill_group FROM learned_skills"
+            )
+        ).fetchall()
+    return pd.DataFrame(rows, columns=["employee", "skill_text", "machine_type", "skill_group"]) if rows else None
 
 
 def clear_skill_matrix():
@@ -307,3 +344,43 @@ def set_employee_roles(employee: str, role_names: list[str]):
                 text("INSERT INTO employee_roles (employee, role) VALUES (:e, :r) ON CONFLICT DO NOTHING"),
                 {"e": employee, "r": role},
             )
+
+
+# ------------------------------------------------------------------ Learning
+def list_learned() -> pd.DataFrame | None:
+    with get_engine().connect() as conn:
+        rows = conn.execute(
+            text("SELECT employee, skill_text, machine_type, skill_group, times, updated_at "
+                 "FROM learned_skills ORDER BY updated_at DESC")
+        ).fetchall()
+    cols = ["employee", "skill_text", "machine_type", "skill_group", "times", "updated_at"]
+    return pd.DataFrame(rows, columns=cols) if rows else None
+
+
+def add_learned(items: list[dict]) -> int:
+    """Upserts learned (employee, operation) qualifications; repeats raise `times`.
+    Returns how many distinct entries were written."""
+    unique = {
+        (str(i["employee"]), i["skill_text"], i.get("machine_type") or ""): i["skill_group"] for i in items
+    }
+    if unique:
+        _bulk_execute(
+            "INSERT INTO learned_skills (employee, skill_text, machine_type, skill_group) VALUES %s "
+            "ON CONFLICT (employee, skill_text, machine_type) DO UPDATE SET "
+            "times = learned_skills.times + 1, skill_group = EXCLUDED.skill_group, updated_at = now()",
+            [(e, t, m, sg) for (e, t, m), sg in unique.items()],
+        )
+    return len(unique)
+
+
+def delete_learned(employee: str, skill_text: str, machine_type: str):
+    with get_engine().begin() as conn:
+        conn.execute(
+            text("DELETE FROM learned_skills WHERE employee=:e AND skill_text=:t AND machine_type=:m"),
+            {"e": employee, "t": skill_text, "m": machine_type or ""},
+        )
+
+
+def clear_learned():
+    with get_engine().begin() as conn:
+        conn.execute(text("DELETE FROM learned_skills"))

@@ -69,7 +69,7 @@ def _employee_machines(ob_rows: list[dict], skill_matrix: dict, skill_pairs) -> 
 
 def build_staffing_evidence(ob_rows: list[dict], skill_matrix: dict) -> StaffingEvidence:
     """skill_matrix: {employee: set(skill_group)} from core.state.skill_matrix_dict."""
-    skill_pairs = db.list_skill_pairs()
+    skill_pairs = db.list_effective_skill_pairs()
     partial, related = infer_weak_evidence(ob_rows, skill_pairs)
     return StaffingEvidence(
         strong=_invert(skill_matrix),

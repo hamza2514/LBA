@@ -5,8 +5,11 @@ from __future__ import annotations
 
 import streamlit as st
 
+from core.state import learn_assignments, save_ob_order
+
 from core.export import to_excel_bytes
 from core.evidence import diagnose_unstaffed
+from core.learning import learned_qualifications, operation_order
 from core.results import (
     PALETTE, ResultRow, RunResult, build_rows, effective_records,
     employee_payload, reconcile, summarize,
@@ -56,6 +59,24 @@ def _component_row(r: ResultRow) -> dict:
     }
 
 
+def _learn_button(prefix: str, result: RunResult, rows, order, assign) -> None:
+    """Persists what the user did to this layout: manual employee choices
+    become learned skills; the row sequence becomes the OB's sequence."""
+    st.caption("Happy with this layout? Save it so the app learns your manual assignments and operation sequence.")
+    if not st.button("🧠 Save layout & learn", key=f"{prefix}_learn"):
+        return
+    learned = learn_assignments(learned_qualifications(rows, assign))
+    new_order = operation_order(rows, order, result.ob_row_ids)
+    order_changed = new_order != result.ob_row_ids
+    if order_changed:
+        save_ob_order(new_order)
+    st.success(
+        f"Learned {learned} employee–operation pair(s)"
+        + (" and saved the new operation sequence." if order_changed else ".")
+        + " Used automatically from the next run."
+    )
+
+
 def render_results(*, prefix: str, employees_df, file_stem: str) -> None:
     """Renders the result of the last run stored under `prefix`."""
     result: RunResult | None = st.session_state.get(f"{prefix}_result")
@@ -102,6 +123,8 @@ def render_results(*, prefix: str, employees_df, file_stem: str) -> None:
         with st.expander(f"Why are {len(diagnosis)} operation(s) unstaffed by the system?"):
             st.caption("free/total = people with that level of evidence who were still available / in total.")
             st.dataframe(diagnosis, width="stretch", hide_index=True)
+
+    _learn_button(prefix, result, rows, order, assign)
 
     st.download_button(
         "⬇️ Download Excel",

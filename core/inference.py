@@ -29,6 +29,7 @@ AMBIGUITY_MARGIN = 3  # accept runner-up skill texts within this many points of 
 
 # "Related wording" evidence (weaker than a near-match, stronger than machine-only).
 MIN_SHARED_TOKENS = 2
+RELATED_COUNT_BONUS = 0.05
 RELATED_MIN_COVERAGE = 0.66   # share of the shorter name's words found in the other
 TOKEN_TYPO_THRESHOLD = 80
 _STOP_TOKENS = {"for", "with", "the", "and", "into", "onto", "from", "time", "times", "after", "before", "all", "round"}
@@ -53,6 +54,14 @@ _CANONICAL = tuple(
         ("segrigation", "segregation"),
         ("sefty", "safety"),
         ("pkt", "pocket"),
+        ("pocke", "pocket"),
+        ("lineing", "lining"),
+        ("frnt", "front"),
+        ("bk", "back"),
+        ("lbl", "label"),
+        ("att", "attach"),
+        ("atach", "attach"),
+        ("tak", "tack"),
     )
 )
 
@@ -61,9 +70,18 @@ def machine_key(machine) -> str:
     return re.sub(r"[^A-Z0-9]", "", str(machine or "").upper())
 
 
+def machine_family(machine) -> str:
+    """Machine key without ply/thread counts: '3T O/L' and '5T O/L' are both
+    overlock; 'SNLS [3]' and 'SNLS' are both single-needle lockstitch."""
+    return re.sub(r"\d+", "", machine_key(machine))
+
+
 def _machines_compatible(a: str, b: str) -> bool:
     ka, kb = machine_key(a), machine_key(b)
     if not ka or not kb or ka == kb:
+        return True
+    fa, fb = machine_family(a), machine_family(b)
+    if fa and fa == fb:
         return True
     return fuzz.ratio(ka, kb) >= MACHINE_SIMILARITY_THRESHOLD
 
@@ -151,7 +169,8 @@ def token_overlap(a: str, b: str) -> float:
 def related_holders(operation: str, machine: str, vocab: dict) -> dict:
     """{employee: strength} for people holding a skill with related wording
     on a compatible machine. Strength = best overlap over their skills."""
-    out: dict = {}
+    best: dict = {}
+    count: dict = {}
     for info in vocab.values():
         if not _machines_compatible(machine, info["machine"]):
             continue
@@ -159,8 +178,10 @@ def related_holders(operation: str, machine: str, vocab: dict) -> dict:
         if strength <= 0:
             continue
         for emp in info["holders"]:
-            out[emp] = max(out.get(emp, 0.0), strength)
-    return out
+            best[emp] = max(best.get(emp, 0.0), strength)
+            count[emp] = count.get(emp, 0) + 1
+    # holding several related skills is stronger evidence than holding one
+    return {emp: best[emp] + RELATED_COUNT_BONUS * (count[emp] - 1) for emp in best}
 
 
 def explain_operation(operation: str, machine: str, vocab: dict) -> dict:

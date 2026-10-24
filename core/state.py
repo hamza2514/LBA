@@ -103,6 +103,15 @@ def delete_ob(name: str):
     db.delete_ob(name)
 
 
+def save_ob_order(row_ids: list[int]):
+    db.save_ob_order(row_ids)
+
+
+# ---------------------------------------------------------------- Learning
+def learn_assignments(items: list[dict]) -> int:
+    return db.add_learned(items)
+
+
 # ----------------------------------------------------------- Skill matrix
 def _resolved_skill_rows(ob_rows: list | None) -> list[tuple[str, str, str]]:
     """[(employee, skill_text, skill_group)] with each entry re-resolved against
@@ -110,7 +119,7 @@ def _resolved_skill_rows(ob_rows: list | None) -> list[tuple[str, str, str]]:
     exact skill group the OB uses), falling back to the stored resolution."""
     from core.matching import match_against_rows
 
-    sdf = db.list_skill_pairs()
+    sdf = db.list_effective_skill_pairs()
     if sdf is None:
         return []
     cache: dict = {}
@@ -153,7 +162,7 @@ def skill_matrix_dict(ob_rows: list | None = None) -> dict:
     out: dict = {}
     for emp, _, sg in _resolved_skill_rows(ob_rows):
         out.setdefault(emp, set()).add(sg)
-    for emp, sgs in infer_qualifications(ob_rows or [], db.list_skill_pairs()).items():
+    for emp, sgs in infer_qualifications(ob_rows or [], db.list_effective_skill_pairs()).items():
         out.setdefault(emp, set()).update(sgs)
     for emp, by_sg in _role_grants(ob_rows).items():
         out.setdefault(emp, set()).update(by_sg)
