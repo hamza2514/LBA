@@ -30,6 +30,8 @@ mode = st.radio("Mode", options=["Single Line", "Multiple Lines"], horizontal=Tr
 ob_name = st.selectbox("Operation Breakdown", options=obs)
 ob = get_ob(ob_name)
 warn_missing_sections(ob["rows"])
+row_ids = [r["id"] for r in ob["rows"]]
+row_ids = [r["id"] for r in ob["rows"]]
 ob_lines = list_lines()
 
 c1, c2, c3 = st.columns(3)
@@ -49,7 +51,7 @@ if mode == "Single Line":
             _, units = run_single_line(
                 line, ob["rows"], shift_time, target, plan_efficiency, ctx.evidence, ctx.employee_line
             )
-        store_result("lb", RunResult(units=units, line_order=[line], context=ctx))
+        store_result("lb", RunResult(units=units, line_order=[line], context=ctx, ob_name=ob_name, ob_row_ids=row_ids))
 else:
     lines = st.multiselect("Lines", options=ob_lines, default=ob_lines)
     if st.button("Run Layout Balancing", type="primary", disabled=len(lines) < 2):
@@ -59,7 +61,7 @@ else:
                 lines, {ln: ob["rows"] for ln in lines}, shift_time, target, plan_efficiency,
                 ctx.evidence, ctx.employee_line,
             )
-        store_result("lb", RunResult(units=units, line_order=lines, context=ctx))
+        store_result("lb", RunResult(units=units, line_order=lines, context=ctx, ob_name=ob_name, ob_row_ids=row_ids))
     if len(lines) < 2:
         st.caption("Pick at least two lines for multi-line balancing.")
 

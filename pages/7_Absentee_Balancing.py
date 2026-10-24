@@ -31,6 +31,7 @@ if missing:
 ob_name = st.selectbox("Operation Breakdown", options=obs)
 ob = get_ob(ob_name)
 warn_missing_sections(ob["rows"])
+row_ids = [r["id"] for r in ob["rows"]]
 ob_lines = list_lines()
 lines = st.multiselect("Lines", options=ob_lines, default=ob_lines)
 
@@ -65,7 +66,7 @@ if present is not None:
                 float(ob["shift_time"]), float(ob["target"]), float(ob["plan_efficiency"]),
                 ctx.evidence, ctx.employee_line,
             )
-        store_result("ab", RunResult(units=units, line_order=lines, context=ctx))
+        store_result("ab", RunResult(units=units, line_order=lines, context=ctx, ob_name=ob_name, ob_row_ids=row_ids))
     if len(lines) < 2:
         st.caption("Pick at least two lines.")
 
