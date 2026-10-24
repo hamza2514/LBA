@@ -6,8 +6,8 @@ from core.importers import read_any
 from core.orchestrate import run_multi_line
 from core.results import RunResult
 from core.results_view import render_results, store_result
-from core.ui import warn_missing_sections
-from core.state import employee_line_dict, get_ob, init_state, list_lines, list_obs
+from core.line_setup import combined_rows, select_line_styles
+from core.state import employee_line_dict, init_state, list_lines, list_obs
 
 st.set_page_config(page_title="Absentee Balancing", page_icon="🧍", layout="wide")
 init_state()
@@ -28,12 +28,10 @@ if missing:
     st.warning("Still needed:\n\n" + "\n".join(f"- {m}" for m in missing))
     st.stop()
 
-ob_name = st.selectbox("Operation Breakdown", options=obs)
-ob = get_ob(ob_name)
-warn_missing_sections(ob["rows"])
-row_ids = [r["id"] for r in ob["rows"]]
 ob_lines = list_lines()
 lines = st.multiselect("Lines", options=ob_lines, default=ob_lines)
+st.caption("Pick the style (Operation Breakdown) running on each line. Target and efficiency default to the style's own values.")
+setups, shift_time = select_line_styles("ab", lines, obs)
 
 all_employees = sorted(employee_line_dict())
 
@@ -60,13 +58,16 @@ if present is not None:
 
     if st.button("Run Absentee Balancing", type="primary", disabled=len(lines) < 2):
         with st.spinner("Balancing across lines with present employees only..."):
-            ctx = build_context(ob["rows"], present=present)
+            ctx = build_context(combined_rows(setups), present=present)
             _, units = run_multi_line(
-                lines, {ln: ob["rows"] for ln in lines},
-                float(ob["shift_time"]), float(ob["target"]), float(ob["plan_efficiency"]),
+                lines, {s.line: s.rows for s in setups}, shift_time,
+                {s.line: s.target for s in setups}, {s.line: s.plan_efficiency for s in setups},
                 ctx.evidence, ctx.employee_line,
             )
-        store_result("ab", RunResult(units=units, line_order=lines, context=ctx, ob_name=ob_name, ob_row_ids=row_ids))
+        store_result("ab", RunResult(
+            units=units, line_order=lines, context=ctx,
+            ob_by_line={s.line: s.ob_name for s in setups}, ob_row_ids={s.line: s.row_ids for s in setups},
+        ))
     if len(lines) < 2:
         st.caption("Pick at least two lines.")
 
