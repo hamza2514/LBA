@@ -74,3 +74,12 @@ def test_related_wording_ignores_shared_generic_words_only():
     from core.inference import token_overlap
 
     assert token_overlap("BACK RISE ATTACH", "BACK LABEL ATTACH") == 0.0
+
+
+def test_overlock_ply_variants_are_the_same_machine_family():
+    rows = [("E1", "LINING CLOSE", "5T O/L")]
+    vocab = build_vocab(_skills(rows))
+    from core.inference import related_holders
+
+    assert related_holders("PKT LINNING CLOSE (WITH TURN )", "3T O/L", vocab) == {"E1": 1.0}
+    assert related_holders("PKT LINNING CLOSE (WITH TURN )", "SNLS [3]", vocab) == {}
