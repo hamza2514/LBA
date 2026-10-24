@@ -63,3 +63,19 @@ def test_operations_never_merge_across_sections_or_without_a_section():
     for u in units:  # cross-line pairs are allowed, but only inside one real section
         sections = {op.section for op in u.operations}
         assert len(sections) == 1 and (len(u.operations) == 1 or "" not in sections)
+
+
+def test_each_line_runs_its_own_style_target_and_efficiency():
+    style_a = [{"operation": "A OP", "machine_type": "SNLS", "sam": 1.0, "skill_group": "SG-A", "section": "Back"}]
+    style_b = [{"operation": "B OP", "machine_type": "SNLS", "sam": 1.0, "skill_group": "SG-B", "section": "Back"}]
+    ev = StaffingEvidence(strong={"SG-A": {"E1", "E2", "E3"}, "SG-B": {"E4", "E5", "E6"}})
+    _, units = run_multi_line(
+        ["L1", "L2"], {"L1": style_a, "L2": style_b}, 480, {"L1": 480, "L2": 960}, {"L1": 1.0, "L2": 1.0}, ev, {}
+    )
+    by_line = {}
+    for u in units:
+        for op in u.operations:
+            by_line.setdefault(op.line, set()).add(op.operation)
+    assert by_line == {"L1": {"A OP"}, "L2": {"B OP"}}
+    assert sum(1 for u in units if u.operations[0].line == "L1") == 1   # 480 target -> 1 head
+    assert sum(1 for u in units if u.operations[0].line == "L2") == 2   # 960 target -> 2 heads
