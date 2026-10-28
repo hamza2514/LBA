@@ -44,6 +44,14 @@ ALTER TABLE ob_rows ADD COLUMN IF NOT EXISTS section TEXT NOT NULL DEFAULT '';
 
 ALTER TABLE ob_rows ADD COLUMN IF NOT EXISTS position INTEGER;
 
+CREATE TABLE IF NOT EXISTS users (
+    username TEXT PRIMARY KEY,
+    password_hash TEXT NOT NULL,
+    full_name TEXT NOT NULL DEFAULT '',
+    role TEXT NOT NULL DEFAULT 'user',
+    created_at TIMESTAMPTZ DEFAULT now()
+);
+
 CREATE TABLE IF NOT EXISTS learned_skills (
     employee TEXT NOT NULL,
     skill_text TEXT NOT NULL,
@@ -172,6 +180,22 @@ def save_ob(name: str, shift_time: float, target: float, plan_efficiency: float,
             "INSERT INTO ob_rows (ob_name, operation, machine_type, sam, skill_group, section) VALUES %s",
             [(name, r["operation"], r.get("machine_type"), r["sam"], r["skill_group"], r.get("section") or "") for r in rows],
         )
+
+
+def list_ob_summaries() -> pd.DataFrame:
+    """One row per saved Operation Breakdown with the numbers shown in lists."""
+    with get_engine().connect() as conn:
+        rows = conn.execute(
+            text(
+                "SELECT o.name, COUNT(r.id), COALESCE(SUM(r.sam), 0), "
+                "COUNT(DISTINCT NULLIF(r.section, '')), o.shift_time, o.target, o.plan_efficiency, o.created_at "
+                "FROM operation_breakdowns o LEFT JOIN ob_rows r ON r.ob_name = o.name "
+                "GROUP BY o.name, o.shift_time, o.target, o.plan_efficiency, o.created_at "
+                "ORDER BY o.created_at DESC NULLS LAST, o.name"
+            )
+        ).fetchall()
+    cols = ["name", "operations", "total_smv", "sections", "shift_time", "target", "plan_efficiency", "created_at"]
+    return pd.DataFrame(rows, columns=cols)
 
 
 def get_ob(name: str) -> dict | None:
@@ -384,3 +408,42 @@ def delete_learned(employee: str, skill_text: str, machine_type: str):
 def clear_learned():
     with get_engine().begin() as conn:
         conn.execute(text("DELETE FROM learned_skills"))
+
+
+# -------------------------------------------------------------------- Users
+def count_users() -> int:
+    with get_engine().connect() as conn:
+        return int(conn.execute(text("SELECT COUNT(*) FROM users")).scalar())
+
+
+def get_user(username: str) -> dict | None:
+    with get_engine().connect() as conn:
+        row = conn.execute(
+            text("SELECT username, password_hash, full_name, role FROM users WHERE username = :u"),
+            {"u": username},
+        ).fetchone()
+    return None if not row else {"username": row[0], "password_hash": row[1], "full_name": row[2], "role": row[3]}
+
+
+def list_users() -> pd.DataFrame:
+    with get_engine().connect() as conn:
+        rows = conn.execute(
+            text("SELECT username, full_name, role, created_at FROM users ORDER BY created_at")
+        ).fetchall()
+    return pd.DataFrame(rows, columns=["username", "full_name", "role", "created_at"])
+
+
+def save_user(username: str, password_hash: str, full_name: str, role: str):
+    with get_engine().begin() as conn:
+        conn.execute(
+            text(
+                "INSERT INTO users (username, password_hash, full_name, role) VALUES (:u, :p, :f, :r) "
+                "ON CONFLICT (username) DO UPDATE SET password_hash = :p, full_name = :f, role = :r"
+            ),
+            {"u": username, "p": password_hash, "f": full_name, "r": role},
+        )
+
+
+def delete_user(username: str):
+    with get_engine().begin() as conn:
+        conn.execute(text("DELETE FROM users WHERE username = :u"), {"u": username})

@@ -17,7 +17,7 @@ from core.results import (
 from core.table_component import results_table
 
 
-def store_result(prefix: str, result: RunResult) -> None:
+def store_result(prefix: str, result: RunResult | None) -> None:
     """Saves a fresh run and resets any edits made to the previous one."""
     st.session_state[f"{prefix}_result"] = result
     st.session_state[f"{prefix}_overrides"] = None

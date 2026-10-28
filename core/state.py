@@ -10,18 +10,16 @@ from __future__ import annotations
 import streamlit as st
 
 import core.db as db
-from core.ui import apply_theme
 
 _EPHEMERAL_KEYS = ("lb_result", "lb_overrides", "ab_result", "ab_overrides", "skill_pairs_preview")
 
 
 def init_state():
-    """Verifies the DB connection (creating/migrating the schema on first run),
-    initialises per-session keys and applies the app theme."""
+    """Verifies the DB connection (creating/migrating the schema on first run)
+    and initialises per-session keys."""
     db.get_engine()
     for key in _EPHEMERAL_KEYS:
         st.session_state.setdefault(key, None)
-    apply_theme()
 
 
 # ------------------------------------------------------------------- Lines

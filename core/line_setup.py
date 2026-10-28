@@ -41,7 +41,9 @@ def combined_rows(setups: list[LineSetup]) -> list[dict]:
     return rows
 
 
-def select_line_styles(prefix: str, lines: list[str], obs: list[str]) -> tuple[list[LineSetup], float]:
+def select_line_styles(
+    prefix: str, lines: list[str], obs: list[str], default_ob: str | None = None
+) -> tuple[list[LineSetup], float]:
     """UI: one row per line (style, target, efficiency) plus a shared shift time."""
     loaded: dict = {}
 
@@ -50,25 +52,31 @@ def select_line_styles(prefix: str, lines: list[str], obs: list[str]) -> tuple[l
             loaded[name] = get_ob(name)
         return loaded[name]
 
+    widths = [0.8, 3.4, 1, 1]
+    for column, label in zip(st.columns(widths), ["Line", "Style", "Target / shift", "Plan eff"]):
+        column.markdown(f"<span style='color:#64748B;font-size:.74rem;font-weight:700;text-transform:uppercase;"
+                        f"letter-spacing:.06em'>{label}</span>", unsafe_allow_html=True)
+
     setups: list[LineSetup] = []
     for line in lines:
-        c0, c1, c2, c3 = st.columns([1, 3, 1.3, 1.3])
-        c0.markdown(f"**{line}**")
-        ob_name = c1.selectbox("Style (Operation Breakdown)", options=obs, key=f"{prefix}_ob_{line}",
+        c0, c1, c2, c3 = st.columns(widths, vertical_alignment="center")
+        c0.markdown(f"<div style='padding-top:6px;font-weight:700'>{line}</div>", unsafe_allow_html=True)
+        ob_name = c1.selectbox("Style (Operation Breakdown)", options=obs, key=f"{prefix}_ob_{line}_{default_ob}",
+                               index=obs.index(default_ob) if default_ob in obs else 0,
                                label_visibility="collapsed")
         ob = ob_of(ob_name)
         target = c2.number_input("Target", min_value=1.0, value=float(ob["target"]),
-                                 key=f"{prefix}_target_{line}_{ob_name}", help="Units/shift for this line")
+                                 key=f"{prefix}_target_{line}_{ob_name}", label_visibility="collapsed")
         eff = c3.number_input("Plan Eff", min_value=0.01, max_value=1.0, value=float(ob["plan_efficiency"]),
-                              key=f"{prefix}_eff_{line}_{ob_name}", help="Plan efficiency for this line")
+                              key=f"{prefix}_eff_{line}_{ob_name}", label_visibility="collapsed")
         setups.append(LineSetup(line, ob_name, ob, target, eff))
 
     for name in dict.fromkeys(s.ob_name for s in setups):
         warn_missing_sections(ob_of(name)["rows"], name)
 
     first = setups[0].ob if setups else None
-    shift_time = st.number_input(
-        "Shift Time (minutes) — shared by all lines", min_value=1.0,
+    shift_time = st.columns([1.5, 4])[0].number_input(
+        "Shift time (min) — shared by all lines", min_value=1.0,
         value=float(first["shift_time"]) if first else 480.0, key=f"{prefix}_shift_multi",
     )
     return setups, shift_time
