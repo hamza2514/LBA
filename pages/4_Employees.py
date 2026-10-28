@@ -1,11 +1,11 @@
 import streamlit as st
 
+from core.ui import page_header
 from core.state import init_state
 import core.db as db
 
-st.set_page_config(page_title="Employees", page_icon="👥", layout="wide")
 init_state()
-st.title("👥 Employees")
+page_header('Employees', 'Browse and search the employee list.')
 
 df = db.list_employees()
 if df is None:

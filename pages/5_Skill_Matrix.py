@@ -1,11 +1,11 @@
 import streamlit as st
 
+from core.ui import page_header
 from core.state import init_state
 import core.db as db
 
-st.set_page_config(page_title="Skill Matrix", page_icon="🎯", layout="wide")
 init_state()
-st.title("🎯 Skill Matrix")
+page_header('Skill Matrix', 'Coverage per employee and per skill group.')
 
 df = db.list_skill_pairs()
 if df is None:

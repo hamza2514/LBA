@@ -3,16 +3,15 @@ import streamlit as st
 import core.db as db
 from core.context import build_context
 from core.importers import read_any
+from core.line_setup import combined_rows, select_line_styles
 from core.orchestrate import run_multi_line
 from core.results import RunResult
 from core.results_view import render_results, store_result
-from core.line_setup import combined_rows, select_line_styles
 from core.state import employee_line_dict, init_state, list_lines, list_obs
+from core.ui import page_header
 
-st.set_page_config(page_title="Absentee Balancing", page_icon="🧍", layout="wide")
 init_state()
-st.title("🧍 Absentee Balancing")
-st.caption("Always multi-line, same engine as Layout Balancing's multi-line mode — restricted to whoever's actually present today.")
+page_header("Absentee Balancing", "Re-balance multiple lines using only the people present today.")
 
 obs = list_obs()
 missing = []
@@ -29,34 +28,31 @@ if missing:
     st.stop()
 
 ob_lines = list_lines()
-lines = st.multiselect("Lines", options=ob_lines, default=ob_lines)
-st.caption("Pick the style (Operation Breakdown) running on each line. Target and efficiency default to the style's own values.")
-setups, shift_time = select_line_styles("ab", lines, obs)
-
 all_employees = sorted(employee_line_dict())
 
-st.subheader("Who's present today?")
-mode = st.radio(
-    "How do you want to mark attendance?",
-    options=["Upload attendance file", "Pick present employees manually"],
-    horizontal=True,
-)
+with st.container(border=True):
+    st.markdown("**1 · Lines and styles**")
+    lines = st.pills("Lines", options=ob_lines, selection_mode="multi", default=ob_lines, key="ab_lines") or []
+    setups, shift_time = select_line_styles("ab", lines, obs) if lines else ([], 480.0)
 
-present: set | None = None
-if mode == "Upload attendance file":
-    file = st.file_uploader("Upload attendance (.xlsx or .csv) — any column containing the employee ID marks them present", type=["xlsx", "csv"])
-    if file:
-        raw = read_any(file)
-        st.dataframe(raw.head(10), width="stretch")
-        id_col = st.selectbox("Which column has the Employee ID?", options=list(raw.columns))
-        present = set(raw[id_col].astype(str))
-else:
-    present = set(st.multiselect("Present employees", options=all_employees, default=all_employees))
+with st.container(border=True):
+    st.markdown("**2 · Who is present today?**")
+    mode = st.segmented_control("Attendance", ["Upload attendance file", "Pick manually"],
+                                default="Pick manually", key="ab_attendance_mode")
+    present: set | None = None
+    if mode == "Upload attendance file":
+        file = st.file_uploader("Attendance (.xlsx or .csv) — any row in the chosen ID column counts as present",
+                                type=["xlsx", "csv"])
+        if file:
+            raw = read_any(file)
+            id_col = st.selectbox("Employee ID column", options=list(raw.columns))
+            present = set(raw[id_col].astype(str))
+    else:
+        present = set(st.multiselect("Present employees", options=all_employees, default=all_employees))
 
 if present is not None:
-    st.caption(f"{len(present)} employee(s) marked present out of {len(all_employees)} total.")
-
-    if st.button("Run Absentee Balancing", type="primary", disabled=len(lines) < 2):
+    st.caption(f"{len(present)} of {len(all_employees)} employees marked present.")
+    if st.button("Run absentee balancing", type="primary", disabled=len(lines) < 2, icon=":material/play_arrow:"):
         with st.spinner("Balancing across lines with present employees only..."):
             ctx = build_context(combined_rows(setups), present=present)
             _, units = run_multi_line(

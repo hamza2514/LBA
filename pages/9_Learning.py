@@ -1,15 +1,11 @@
 import streamlit as st
 
 import core.db as db
+from core.ui import page_header
 from core.state import employee_names_dict, init_state
 
-st.set_page_config(page_title="Learning", page_icon="🧠", layout="wide")
 init_state()
-st.title("🧠 Learning")
-st.caption(
-    "Everything the app has learned from the layouts you saved (🧠 Save layout & learn). "
-    "Learned pairs are used exactly like uploaded skills — including for similarly worded operations."
-)
+page_header('Learning', 'Everything learned from the layouts you saved. Used like uploaded skills.')
 
 df = db.list_learned()
 if df is None:

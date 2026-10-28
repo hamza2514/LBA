@@ -1,18 +1,12 @@
 import streamlit as st
 
+from core.ui import page_header
 from core.state import init_state, list_roles, save_role, delete_role, employee_roles_dict, set_employee_roles, list_obs, get_ob
 from core.matching import load_taxonomy
 import core.db as db
 
-st.set_page_config(page_title="Roles", page_icon="🎓", layout="wide")
 init_state()
-st.title("🎓 Roles")
-st.caption(
-    "This is how you teach the tool a general rule ONCE instead of listing every individual operation. "
-    "Example: a 'Presser' is qualified for every operation on any press-family machine — define that "
-    "mapping here, and any employee tagged with the Presser role gets it automatically, in every OB, "
-    "even operations the taxonomy has never seen before."
-)
+page_header('Roles', 'Teach a general rule once: a role qualifies for every operation on its machine types.')
 
 
 def known_machine_types() -> list[str]:

@@ -8,15 +8,14 @@ from core.importers import (
 )
 from core.matching import get_or_create_skill_group
 from core.sections import canonical_section
+from core.ui import page_header
 from core.state import (
     ensure_lines_registered, extra_taxonomy_list, get_ob, init_state, list_obs,
     record_taxonomy_extra_bulk, save_ob,
 )
 
-st.set_page_config(page_title="Data Import", page_icon="📥", layout="wide")
 init_state()
-st.title("📥 Data Import")
-st.caption("Everything you load here is saved permanently — it will still be here next time you open the app.")
+page_header('Data Import', 'Everything you load here is saved permanently.')
 
 tab_ob, tab_emp, tab_skill = st.tabs(["Operation Breakdown", "Employees", "Skill Matrix"])
 
