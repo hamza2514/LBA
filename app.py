@@ -1,65 +1,74 @@
+"""Entrypoint: landing/sign-in for visitors, grouped navigation for signed-in users."""
+from __future__ import annotations
+
+from html import escape
+
 import streamlit as st
 
-from core.state import init_state, list_lines, list_obs, extra_taxonomy_list
-import core.db as db
+from core import auth, landing
+from core.state import init_state
+from core.ui import BRAND, apply_theme
 
-st.set_page_config(page_title="Line Balancing", page_icon="🧵", layout="wide")
+st.set_page_config(page_title=f"{BRAND} · Line Balancing", page_icon="🧵", layout="wide")
 
 try:
     init_state()
 except Exception as e:
+    apply_theme(hide_sidebar=True)
     st.error(
         "Couldn't connect to the database. Set DATABASE_URL in your app's Secrets "
         "(Settings → Secrets on Streamlit Cloud) to a Postgres connection string, e.g. "
-        "from a free Neon project — same pattern as the loss-time tracker."
+        "from a free Neon project."
     )
     st.caption(f"Technical detail: {e}")
     st.stop()
 
-st.title("🧵 Line Balancing")
-st.caption("Upload once, balance any line, any number of lines — across factories, not just one. Everything here is saved permanently.")
+user = auth.current_user()
+if not user:
+    apply_theme(hide_sidebar=True)
+    st.navigation([st.Page(landing.render, title="Sign in", url_path="signin")], position="hidden").run()
+    st.stop()
 
-col1, col2, col3, col4 = st.columns(4)
+apply_theme()
+st.logo("assets/logo.svg", icon_image="assets/icon.svg")
 
-with col1:
-    st.subheader("Lines")
-    st.metric("Registered", len(list_lines()))
 
-with col2:
-    st.subheader("Operation Breakdowns")
-    st.metric("Saved", len(list_obs()))
+def _page(path: str, title: str, icon: str, **kwargs) -> st.Page:
+    return st.Page(f"pages/{path}", title=title, icon=f":material/{icon}:", **kwargs)
 
-with col3:
-    st.subheader("Employees")
-    edf = db.list_employees()
-    st.metric("Loaded", len(edf) if edf is not None else 0)
 
-with col4:
-    st.subheader("Skill Matrix")
-    sdf = db.list_skill_pairs()
-    st.metric("Employee-skill pairs", len(sdf) if sdf is not None else 0)
+setup_pages = [_page("1_Lines.py", "Lines", "factory")]
+if user["role"] == "admin":
+    setup_pages.append(_page("10_Users.py", "Users", "admin_panel_settings"))
 
-st.divider()
-st.markdown(
-    """
-**Get started, in order:**
-1. **Lines** — add the line names you work with.
-2. **Data Import** — upload an Operation Breakdown, your Employee list, and the Skill Matrix.
-3. **Roles** — teach the tool general-purpose roles (e.g. "Presser" = qualified for every operation on
-   any press-family machine) so employees don't need every individual operation spelled out.
-4. **Operation Breakdown** — review the calculated manpower table for any saved OB.
-5. **Layout Balancing** — run single-line or multi-line balancing.
-6. **Absentee Balancing** — same as multi-line, restricted to who's actually present today.
-
-*New operations that don't match the reference skill taxonomy are matched automatically, or a new
-Skill Group is created on the spot — nothing blocks on an unrecognized operation. Everything you
-teach it (Lines, Roles, Skill Matrix, auto-created Skill Groups) is now saved permanently in the
-database — it will still be here next time you open the app.*
-"""
+navigation = st.navigation(
+    {
+        "Planning": [
+            _page("0_Home.py", "Home", "home", default=True),
+            _page("3_Operation_Breakdown.py", "Operation Breakdown", "account_tree"),
+            _page("6_Layout_Balancing.py", "Layout Balancing", "tune"),
+            _page("7_Absentee_Balancing.py", "Absentee Balancing", "person_off"),
+        ],
+        "Data": [
+            _page("2_Data_Import.py", "Data Import", "upload_file"),
+            _page("4_Employees.py", "Employees", "groups"),
+            _page("5_Skill_Matrix.py", "Skill Matrix", "hub"),
+            _page("8_Roles.py", "Roles", "badge"),
+            _page("9_Learning.py", "Learning", "psychology"),
+        ],
+        "Setup": setup_pages,
+    }
 )
 
-extra = extra_taxonomy_list()
-if extra:
-    with st.expander(f"🆕 {len(extra)} new skill group(s) auto-created so far"):
-        st.caption("These didn't match the reviewed reference taxonomy closely enough, so new IDs were minted. Worth a periodic review.")
-        st.table(extra)
+with st.sidebar:
+    name = user["full_name"] or user["username"]
+    st.markdown(
+        f"<div class='user-chip'><div class='av'>{escape(name[:1].upper())}</div>"
+        f"<div><div class='nm'>{escape(name)}</div><div class='rl'>{escape(user['role'])}</div></div></div>",
+        unsafe_allow_html=True,
+    )
+    if st.button("Sign out", icon=":material/logout:", use_container_width=True):
+        auth.sign_out()
+        st.rerun()
+
+navigation.run()
