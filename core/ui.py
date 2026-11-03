@@ -81,18 +81,6 @@ h1, h2, h3 { color: var(--ink); letter-spacing: -0.02em; }
 .stTabs [data-baseweb="tab-list"] { gap: 6px; }
 .stTabs [data-baseweb="tab"] { border-radius: 10px 10px 0 0; padding: 8px 14px; }
 div[data-testid="stDataFrame"] { border: 1px solid var(--line); border-radius: 12px; overflow: hidden; }
-
-/* ---------- landing ---------- */
-.hero-brand { display:flex; align-items:center; gap:10px; font-weight:750; font-size:1.25rem; color:var(--ink); }
-.hero h1 { font-size: 3rem; line-height:1.05; font-weight: 800; margin: 1.2rem 0 .8rem 0; letter-spacing:-0.035em; padding:0; }
-.hero h1 span { background: linear-gradient(90deg,var(--primary),var(--teal)); -webkit-background-clip:text;
-  -webkit-text-fill-color:transparent; }
-.hero p.lead { color: var(--muted); font-size:1.08rem; max-width: 560px; }
-.chips { display:flex; flex-wrap:wrap; gap:8px; margin: 1rem 0 1.4rem 0; }
-.chip { background:#EEF2FF; color:var(--primary-dark); border-radius:999px; padding:6px 14px; font-weight:600; font-size:.85rem; }
-.chip.t { background:#CCFBF1; color:#0F766E; }
-.signin-title { font-size:1.35rem; font-weight:750; margin:0; }
-.signin-sub { color:var(--muted); margin:.1rem 0 .6rem 0; font-size:.9rem; }
 </style>
 """
 

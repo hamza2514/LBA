@@ -1,46 +1,37 @@
-"""Landing page with sign-in (and first-run administrator setup)."""
+"""Landing page: marketing sections plus the real sign-in form (or, on the very
+first run, the create-administrator form)."""
 from __future__ import annotations
 
 import streamlit as st
 
 from core import auth
-from core.ui import BRAND, TAGLINE
+from core import landing_sections as sections
+from core.landing_styles import CSS
 
-_ILLUSTRATION = """
-<svg viewBox="0 0 560 300" xmlns="http://www.w3.org/2000/svg" style="width:100%;max-width:560px">
-  <defs>
-    <linearGradient id="a" x1="0" y1="0" x2="1" y2="0"><stop offset="0" stop-color="#6366F1"/><stop offset="1" stop-color="#2DD4BF"/></linearGradient>
-    <linearGradient id="b" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#EEF2FF"/><stop offset="1" stop-color="#CCFBF1"/></linearGradient>
-  </defs>
-  <rect x="0" y="0" width="560" height="300" rx="28" fill="url(#b)"/>
-  <g opacity=".55"><circle cx="500" cy="48" r="70" fill="#C7D2FE"/><circle cx="60" cy="270" r="60" fill="#99F6E4"/></g>
-  <g fill="#fff" stroke="#E2E8F0">
-    <rect x="40" y="46" width="480" height="64" rx="14"/><rect x="40" y="128" width="480" height="64" rx="14"/>
-    <rect x="40" y="210" width="480" height="64" rx="14"/>
-  </g>
-  <g fill="url(#a)">
-    <rect x="56" y="62" width="150" height="32" rx="10"/><rect x="214" y="62" width="110" height="32" rx="10" opacity=".75"/>
-    <rect x="332" y="62" width="170" height="32" rx="10" opacity=".5"/>
-    <rect x="56" y="144" width="90" height="32" rx="10" opacity=".75"/><rect x="154" y="144" width="190" height="32" rx="10"/>
-    <rect x="352" y="144" width="150" height="32" rx="10" opacity=".5"/>
-    <rect x="56" y="226" width="200" height="32" rx="10" opacity=".5"/><rect x="264" y="226" width="120" height="32" rx="10"/>
-    <rect x="392" y="226" width="110" height="32" rx="10" opacity=".75"/>
-  </g>
-  <g fill="#0B1020" font-family="Segoe UI,Arial,sans-serif" font-size="12" font-weight="600">
-    <text x="70" y="83">Back</text><text x="228" y="83">Front</text><text x="346" y="83">Assembly</text>
-    <text x="70" y="165">Small parts</text><text x="168" y="165">Pocket setter</text><text x="366" y="165">Dispatch</text>
-  </g>
-</svg>
-"""
+
+def _contact_email() -> str | None:
+    """Optional CONTACT_EMAIL secret; enables the 'Request access' button."""
+    try:
+        return st.secrets.get("CONTACT_EMAIL") or None
+    except Exception:  # no secrets.toml (local dev)
+        return None
+
+
+def _html(markup: str) -> None:
+    st.markdown(markup, unsafe_allow_html=True)
+
+
+def _card_heading(title: str, subtitle: str) -> None:
+    _html(f'<div id="{sections.SIGNIN_ANCHOR}"></div><p class="lp-card-title">{title}</p><p class="lp-card-sub">{subtitle}</p>')
 
 
 def _sign_in_form() -> None:
-    st.markdown("<p class='signin-title'>Welcome back</p><p class='signin-sub'>Sign in to continue</p>",
-                unsafe_allow_html=True)
+    _card_heading("Welcome back", "Sign in with the account your administrator created.")
     with st.form("sign_in", border=False):
         username = st.text_input("Username", placeholder="your.username")
         password = st.text_input("Password", type="password", placeholder="••••••••")
         submitted = st.form_submit_button("Sign in", type="primary", use_container_width=True)
+    _html('<p class="lp-card-foot">Forgot your password? Ask your administrator to reset it.</p>')
     if submitted:
         user = auth.authenticate(username, password)
         if user:
@@ -50,44 +41,43 @@ def _sign_in_form() -> None:
 
 
 def _setup_form() -> None:
-    st.markdown("<p class='signin-title'>Create the administrator account</p>"
-                "<p class='signin-sub'>First run — this account manages other users.</p>", unsafe_allow_html=True)
+    _card_heading("Create the administrator account", "First run — this account manages other users.")
     with st.form("first_admin", border=False):
         full_name = st.text_input("Full name")
         username = st.text_input("Username")
         password = st.text_input("Password", type="password")
         confirm = st.text_input("Confirm password", type="password")
         submitted = st.form_submit_button("Create account & sign in", type="primary", use_container_width=True)
-    if submitted:
-        error = auth.validate_new_password(password, confirm) or (None if username.strip() else "Username is required.")
-        if error:
-            st.error(error)
-            return
-        auth.create_user(username, password, full_name, role="admin")
-        auth.sign_in(auth.authenticate(username, password))
-        st.rerun()
+    if not submitted:
+        return
+    error = auth.validate_new_password(password, confirm) or (None if username.strip() else "Username is required.")
+    if error:
+        st.error(error)
+        return
+    auth.create_user(username, password, full_name, role="admin")
+    auth.sign_in(auth.authenticate(username, password))
+    st.rerun()
 
 
 def render() -> None:
-    left, right = st.columns([1.35, 1], gap="large", vertical_alignment="center")
-    with left:
-        st.markdown(
-            f"""
-<div class="hero">
-  <div class="hero-brand">🧵 {BRAND}</div>
-  <h1>{TAGLINE.split('.')[0]}.<br><span>{TAGLINE.split('.')[1].strip()}.</span></h1>
-  <p class="lead">Upload any Operation Breakdown and skill matrix. The app reads them, staffs every operation
-  with the right operator, and keeps learning from the corrections you make.</p>
-  <div class="chips"><span class="chip">Reads any OB &amp; skill file</span><span class="chip t">Learns from your edits</span>
-  <span class="chip">Multi-line, multi-style</span><span class="chip t">Absentee-ready</span></div>
-</div>
-{_ILLUSTRATION}
-""",
-            unsafe_allow_html=True,
-        )
-    with right:
-        with st.container(border=True):
-            if auth.needs_setup():
-                _setup_form()
-            else:
-                _sign_in_form()
+    _html(f"<style>{CSS}</style>")
+
+    with st.container(key="lp_hero"):
+        _html(sections.nav())
+        copy, form = st.columns([1.18, 1], gap="large", vertical_alignment="center")
+        with copy:
+            _html(sections.hero_copy())
+        with form, st.container(key="lp_card"):
+            _setup_form() if auth.needs_setup() else _sign_in_form()
+        _html(sections.scene())
+
+    with st.container(key="lp_why"):
+        _html(sections.why())
+    with st.container(key="lp_how"):
+        _html(sections.how())
+    with st.container(key="lp_feat"):
+        _html(sections.features())
+    with st.container(key="lp_band"):
+        _html(sections.band(_contact_email()))
+    with st.container(key="lp_footer"):
+        _html(sections.footer())
