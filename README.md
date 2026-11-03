@@ -51,6 +51,7 @@ core/
   evidence.py                  Builds StaffingEvidence from the DB; explains unstaffed operations
   context.py                   Per-run people context (evidence, profiles, lines, names)
   results.py / results_view.py Result-table model + shared result UI (drag, searchable picker, Excel)
+  landing.py / landing_sections.py / landing_styles.py / landing_art.py   Landing page + sign-in (CONTACT_EMAIL secret enables 'Request access')
   table_component.py / export.py / ui.py
 test/                          pytest suite (run `pytest` from the repo root)
   importers.py                 Generic file reading (xlsx/csv/pdf) + column-mapping UI + skill-matrix format handling
