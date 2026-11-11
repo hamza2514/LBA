@@ -1,6 +1,7 @@
 import streamlit as st
 
 import core.db as db
+from core import auth
 from core.ui import page_header
 from core.state import employee_names_dict, init_state
 
@@ -13,7 +14,7 @@ if df is None:
     st.stop()
 
 names = employee_names_dict()
-view = df.copy()
+view = df.copy() if auth.is_admin() else df.drop(columns="skill_group")
 view.insert(1, "employee_name", view["employee"].map(names).fillna(""))
 st.metric("Learned pairs", len(view))
 st.dataframe(view, width="stretch", hide_index=True)

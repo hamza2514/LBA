@@ -51,7 +51,7 @@ with right:
             st.markdown(f"**{r.name}**  \n<span style='color:#64748B;font-size:.82rem'>"
                         f"{r.operations} operations · SMV {r.total_smv:.2f}</span>", unsafe_allow_html=True)
 
-extra = extra_taxonomy_list()
+extra = extra_taxonomy_list() if auth.is_admin() else []
 if extra:
     with st.expander(f"🆕 {len(extra)} new skill group(s) auto-created so far"):
         st.caption("These didn't match the reviewed reference taxonomy closely enough, so new IDs were minted. Worth a periodic review.")

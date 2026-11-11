@@ -2,6 +2,7 @@ import pandas as pd
 import streamlit as st
 
 import core.db as db
+from core import auth
 from core.importers import (
     apply_mapping, column_mapper, long_skill_file_to_pairs, read_any, read_ob_file,
     wide_skill_matrix_to_long,
@@ -28,7 +29,7 @@ def _section_of(value) -> str:
 with tab_ob:
     st.subheader("Operation Breakdown")
     st.caption(
-        "Upload Operation, Machine Type, and SAM/SMV. Skill Group, Shift Target, Manpower, and "
+        "Upload Operation, Machine Type, and SAM/SMV. Shift Target, Manpower, and "
         "Head Allocated are derived automatically. Line sections (Back, Front, Assembly, ...) are "
         "detected from the file when present — operations are only ever merged within one section. "
         "Line is NOT set here; you pick it at Layout/Absentee Balancing."
@@ -113,7 +114,7 @@ with tab_ob:
                 if skipped:
                     msg += f" {skipped} row(s) had a non-numeric or zero SAM and were skipped."
                 if newly_created:
-                    msg += f" {len(newly_created)} operation(s) didn't match the reference taxonomy, so new Skill Group IDs were created for them."
+                    msg += f" {len(newly_created)} operation(s) were new to the system and have been learned for next time."
                 st.success(msg)
 
     saved_obs = list_obs()
@@ -265,7 +266,7 @@ with tab_skill:
                 if dup_count:
                     msg += f" {dup_count} duplicate (employee, skill) row(s) in this file were collapsed (kept the last one) — worth checking your source file for repeated entries."
                 if newly_created:
-                    msg += f" {len(newly_created)} skill name(s) didn't match the reference taxonomy, so new Skill Group IDs were created for them."
+                    msg += f" {len(newly_created)} skill name(s) were new to the system and have been learned for next time."
                 st.success(msg)
                 st.session_state["skill_pairs_preview"] = None
 
@@ -279,4 +280,4 @@ with tab_skill:
             if st.button("Clear all", key="clear_skill_matrix"):
                 db.clear_skill_matrix()
                 st.rerun()
-        st.dataframe(current, width="stretch")
+        st.dataframe(current if auth.is_admin() else current.drop(columns="skill_group"), width="stretch")

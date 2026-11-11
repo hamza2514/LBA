@@ -1,6 +1,7 @@
 import streamlit as st
 
 import core.db as db
+from core import auth
 from core.formulas import compute_ob_table
 from core.ob_component import ob_table
 from core.ob_list import pick_ob
@@ -58,7 +59,7 @@ st.caption("Drag ⠿ to change the operation sequence — saved automatically an
 COLUMNS = [
     {"key": "operation", "label": "Operation"},
     {"key": "machine", "label": "Machine Type"},
-    {"key": "skill_group", "label": "Skill Group"},
+    *([{"key": "skill_group", "label": "Skill Group"}] if auth.is_admin() else []),
     {"key": "sam", "label": "SAM", "num": True},
     {"key": "st100", "label": "Shift Target @100%", "num": True},
     {"key": "stEff", "label": "Shift Target @Plan Eff", "num": True},
