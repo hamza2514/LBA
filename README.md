@@ -51,6 +51,7 @@ core/
   evidence.py                  Builds StaffingEvidence from the DB; explains unstaffed operations
   context.py                   Per-run people context (evidence, profiles, lines, names)
   results.py / results_view.py Result-table model + shared result UI (drag, searchable picker, Excel)
+  tenancy.py / schema.py / workspace.py   One Postgres schema per company (isolation), schema migration, active-company binding
   landing.py / landing_sections.py / landing_styles.py / landing_art.py   Landing page + sign-in (CONTACT_EMAIL secret enables 'Request access')
   table_component.py / export.py / ui.py
 test/                          pytest suite (run `pytest` from the repo root)
@@ -129,9 +130,8 @@ real Layout Balancing page, not just direct function calls.
 
 ## What's still simplified (said plainly, not hidden)
 
-- No login/multi-factory separation yet — any user of the deployed app
-  sees and edits the same shared data. Fine for one team; would need an
-  auth layer for multiple independent factories sharing one deployment.
+- Companies are isolated (own schema: lines, styles, employees, skills, roles,
+  learning). Skill groups and users are shared. No company deletion in the UI yet.
 - Pooling is a greedy heuristic (largest chunks first, first compatible
   bin), not a guaranteed-optimal bin-pack.
 - Tie-breaking between equally-qualified candidates is alphabetical — no

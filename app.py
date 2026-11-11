@@ -5,7 +5,7 @@ from html import escape
 
 import streamlit as st
 
-from core import auth, landing
+from core import auth, landing, workspace
 from core.state import init_state
 from core.ui import BRAND, apply_theme
 
@@ -37,34 +37,44 @@ def _page(path: str, title: str, icon: str, **kwargs) -> st.Page:
     return st.Page(f"pages/{path}", title=title, icon=f":material/{icon}:", **kwargs)
 
 
-setup_pages = [_page("1_Lines.py", "Lines", "factory")]
-if user["role"] == "admin":
-    setup_pages.append(_page("10_Users.py", "Users", "admin_panel_settings"))
+is_admin = user["role"] == "admin"
+company_id = workspace.activate(user)
 
-navigation = st.navigation(
-    {
-        "Planning": [
-            _page("0_Home.py", "Home", "home", default=True),
-            _page("3_Operation_Breakdown.py", "Operation Breakdown", "account_tree"),
-            _page("6_Layout_Balancing.py", "Layout Balancing", "tune"),
-            _page("7_Absentee_Balancing.py", "Absentee Balancing", "person_off"),
-        ],
-        "Data": [
-            _page("2_Data_Import.py", "Data Import", "upload_file"),
-            _page("4_Employees.py", "Employees", "groups"),
-            _page("5_Skill_Matrix.py", "Skill Matrix", "hub"),
-            _page("8_Roles.py", "Roles", "badge"),
-            _page("9_Learning.py", "Learning", "psychology"),
-        ],
-        "Setup": setup_pages,
-    }
-)
+setup_pages = [_page("1_Lines.py", "Lines", "factory")]
+if is_admin:
+    setup_pages.append(_page("10_Users.py", "Users & companies", "admin_panel_settings", default=company_id is None))
+
+if company_id is not None:
+    navigation = st.navigation(
+        {
+            "Planning": [
+                _page("0_Home.py", "Home", "home", default=True),
+                _page("3_Operation_Breakdown.py", "Operation Breakdown", "account_tree"),
+                _page("6_Layout_Balancing.py", "Layout Balancing", "tune"),
+                _page("7_Absentee_Balancing.py", "Absentee Balancing", "person_off"),
+            ],
+            "Data": [
+                _page("2_Data_Import.py", "Data Import", "upload_file"),
+                _page("4_Employees.py", "Employees", "groups"),
+                _page("5_Skill_Matrix.py", "Skill Matrix", "hub"),
+                _page("8_Roles.py", "Roles", "badge"),
+                _page("9_Learning.py", "Learning", "psychology"),
+            ],
+            "Setup": setup_pages,
+        }
+    )
+elif is_admin:
+    navigation = st.navigation({"Setup": setup_pages[1:]})  # no company yet: only Users & companies
+else:
+    st.error("Your account is not linked to a company yet. Ask your administrator to add you to one.")
+    st.stop()
 
 with st.sidebar:
     name = user["full_name"] or user["username"]
+    detail = user["role"] if is_admin else (user.get("company_name") or user["role"])
     st.markdown(
         f"<div class='user-chip'><div class='av'>{escape(name[:1].upper())}</div>"
-        f"<div><div class='nm'>{escape(name)}</div><div class='rl'>{escape(user['role'])}</div></div></div>",
+        f"<div><div class='nm'>{escape(name)}</div><div class='rl'>{escape(detail)}</div></div></div>",
         unsafe_allow_html=True,
     )
     if st.button("Sign out", icon=":material/logout:", use_container_width=True):
