@@ -75,6 +75,8 @@ h1, h2, h3 { color: var(--ink); letter-spacing: -0.02em; }
 .stButton > [data-testid="stBaseButton-tertiary"]:hover { color: var(--primary); background: #EEF2FF; }
 [data-testid="stSidebar"] .stButton > button { background: rgba(255,255,255,.08); border: 1px solid rgba(255,255,255,.14); }
 [data-testid="stSidebar"] .stButton > button * { color: #E2E8F0; }
+[data-testid="stSidebar"] [data-baseweb="select"] * { color:#0F172A; }
+[data-testid="stSidebar"] label p { color:#94A3B8; font-size:.8rem; }
 [data-testid="stSidebar"] .stButton > button:hover { background: rgba(255,255,255,.16); }
 [data-testid="stVerticalBlockBorderWrapper"] [data-testid="stVerticalBlockBorderWrapper"] { box-shadow: none; }
 [data-baseweb="select"] > div, .stTextInput input, .stNumberInput input { border-radius: 10px; min-height: 38px; }

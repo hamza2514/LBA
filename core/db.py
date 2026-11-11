@@ -1,7 +1,10 @@
 """
-Persistence layer (Postgres — Neon). Lines, Operation Breakdowns, Employees,
-Skill Matrix, the auto-extended taxonomy and Roles all live here and survive
-across sessions, deployments and restarts.
+Persistence layer (Postgres — Neon).
+
+Company data (lines, Operation Breakdowns, employees, skill matrix, roles,
+learned skills) lives in one schema per company — see core.tenancy; call
+`use_company` before touching it. Users, companies and the auto-extended skill
+taxonomy are shared across companies.
 
 Connection string comes from Streamlit secrets (DATABASE_URL) in production,
 falling back to the DATABASE_URL environment variable for local development.
@@ -17,90 +20,12 @@ from psycopg2.extras import execute_values
 from sqlalchemy import create_engine, text
 from sqlalchemy.engine import Engine
 
-SCHEMA = """
-CREATE TABLE IF NOT EXISTS lines (
-    name TEXT PRIMARY KEY
-);
-
-CREATE TABLE IF NOT EXISTS operation_breakdowns (
-    name TEXT PRIMARY KEY,
-    shift_time DOUBLE PRECISION NOT NULL,
-    target DOUBLE PRECISION NOT NULL,
-    plan_efficiency DOUBLE PRECISION NOT NULL,
-    created_at TIMESTAMPTZ DEFAULT now()
-);
-
-CREATE TABLE IF NOT EXISTS ob_rows (
-    id SERIAL PRIMARY KEY,
-    ob_name TEXT NOT NULL REFERENCES operation_breakdowns(name) ON DELETE CASCADE,
-    operation TEXT NOT NULL,
-    machine_type TEXT,
-    sam DOUBLE PRECISION NOT NULL,
-    skill_group TEXT NOT NULL,
-    section TEXT NOT NULL DEFAULT ''
-);
-
-ALTER TABLE ob_rows ADD COLUMN IF NOT EXISTS section TEXT NOT NULL DEFAULT '';
-
-ALTER TABLE ob_rows ADD COLUMN IF NOT EXISTS position INTEGER;
-
-CREATE TABLE IF NOT EXISTS users (
-    username TEXT PRIMARY KEY,
-    password_hash TEXT NOT NULL,
-    full_name TEXT NOT NULL DEFAULT '',
-    role TEXT NOT NULL DEFAULT 'user',
-    created_at TIMESTAMPTZ DEFAULT now()
-);
-
-CREATE TABLE IF NOT EXISTS learned_skills (
-    employee TEXT NOT NULL,
-    skill_text TEXT NOT NULL,
-    machine_type TEXT NOT NULL DEFAULT '',
-    skill_group TEXT NOT NULL,
-    times INTEGER NOT NULL DEFAULT 1,
-    updated_at TIMESTAMPTZ DEFAULT now(),
-    PRIMARY KEY (employee, skill_text, machine_type)
-);
-
-CREATE TABLE IF NOT EXISTS employees (
-    employee_id TEXT PRIMARY KEY,
-    employee_name TEXT,
-    line TEXT
-);
-
-CREATE TABLE IF NOT EXISTS skill_matrix (
-    id SERIAL PRIMARY KEY,
-    employee TEXT NOT NULL,
-    skill_text TEXT NOT NULL,
-    machine_type TEXT,
-    skill_group TEXT NOT NULL,
-    UNIQUE (employee, skill_text)
-);
-
-CREATE TABLE IF NOT EXISTS taxonomy_extra (
-    skill_group_id TEXT PRIMARY KEY,
-    operation_description TEXT,
-    machine_type TEXT,
-    sam DOUBLE PRECISION
-);
-
-CREATE TABLE IF NOT EXISTS roles (
-    name TEXT PRIMARY KEY,
-    machine_types JSONB NOT NULL DEFAULT '[]'
-);
-
-CREATE TABLE IF NOT EXISTS employee_roles (
-    employee TEXT NOT NULL,
-    role TEXT NOT NULL REFERENCES roles(name) ON DELETE CASCADE,
-    PRIMARY KEY (employee, role)
-);
-"""
+from core import schema, tenancy
 
 _PAGE_SIZE = 500
 
 
-@st.cache_resource
-def get_engine() -> Engine:
+def _database_url() -> str:
     url = None
     try:
         url = st.secrets.get("DATABASE_URL", None)
@@ -113,14 +38,25 @@ def get_engine() -> Engine:
             "or as an environment variable (local development)."
         )
     # force the psycopg2 driver explicitly (plain Neon URLs don't name one)
-    if url.startswith("postgresql://"):
-        url = url.replace("postgresql://", "postgresql+psycopg2://", 1)
+    return url.replace("postgresql://", "postgresql+psycopg2://", 1) if url.startswith("postgresql://") else url
+
+
+def build_engine(url: str) -> Engine:
+    """Engine with company isolation installed and the schema brought up to date."""
     engine = create_engine(url, pool_pre_ping=True)
-    with engine.begin() as conn:
-        for stmt in SCHEMA.strip().split(";\n\n"):
-            if stmt.strip():
-                conn.execute(text(stmt))
+    tenancy.install(engine)
+    schema.initialise(engine)
     return engine
+
+
+@st.cache_resource
+def get_engine() -> Engine:
+    return build_engine(_database_url())
+
+
+def use_company(company_id: int | None) -> None:
+    """Binds the company whose data this script run reads and writes."""
+    tenancy.use_company(company_id)
 
 
 def _bulk_execute(sql: str, values: list[tuple]) -> None:
@@ -410,6 +346,47 @@ def clear_learned():
         conn.execute(text("DELETE FROM learned_skills"))
 
 
+# ---------------------------------------------------------------- Companies
+def list_companies() -> pd.DataFrame:
+    with get_engine().connect() as conn:
+        rows = conn.execute(
+            text(
+                "SELECT c.id, c.name, COUNT(u.username), c.created_at FROM companies c "
+                "LEFT JOIN users u ON u.company_id = c.id GROUP BY c.id ORDER BY lower(c.name)"
+            )
+        ).fetchall()
+    return pd.DataFrame(rows, columns=["id", "name", "users", "created_at"])
+
+
+def create_company(name: str) -> int:
+    """Registers a company and provisions its private schema. Returns its id."""
+    name = name.strip()
+    if not name:
+        raise ValueError("Company name is required.")
+    with get_engine().begin() as conn:
+        company_id = conn.execute(
+            text("INSERT INTO companies (name) VALUES (:n) ON CONFLICT DO NOTHING RETURNING id"), {"n": name}
+        ).scalar()
+        if company_id is None:
+            raise ValueError(f"A company named '{name}' already exists.")
+        schema.ensure_tenant(conn, company_id)
+    return company_id
+
+
+def rename_company(company_id: int, name: str) -> None:
+    name = name.strip()
+    if not name:
+        raise ValueError("Company name is required.")
+    with get_engine().begin() as conn:
+        updated = conn.execute(
+            text("UPDATE companies SET name = :n WHERE id = :i AND NOT EXISTS "
+                 "(SELECT 1 FROM companies WHERE lower(name) = lower(:n) AND id <> :i)"),
+            {"n": name, "i": company_id},
+        ).rowcount
+    if not updated:
+        raise ValueError(f"A company named '{name}' already exists.")
+
+
 # -------------------------------------------------------------------- Users
 def count_users() -> int:
     with get_engine().connect() as conn:
@@ -419,28 +396,37 @@ def count_users() -> int:
 def get_user(username: str) -> dict | None:
     with get_engine().connect() as conn:
         row = conn.execute(
-            text("SELECT username, password_hash, full_name, role FROM users WHERE username = :u"),
+            text(
+                "SELECT u.username, u.password_hash, u.full_name, u.role, u.company_id, c.name "
+                "FROM users u LEFT JOIN companies c ON c.id = u.company_id WHERE u.username = :u"
+            ),
             {"u": username},
         ).fetchone()
-    return None if not row else {"username": row[0], "password_hash": row[1], "full_name": row[2], "role": row[3]}
+    if not row:
+        return None
+    return {"username": row[0], "password_hash": row[1], "full_name": row[2], "role": row[3],
+            "company_id": row[4], "company_name": row[5]}
 
 
 def list_users() -> pd.DataFrame:
     with get_engine().connect() as conn:
         rows = conn.execute(
-            text("SELECT username, full_name, role, created_at FROM users ORDER BY created_at")
+            text(
+                "SELECT u.username, u.full_name, u.role, c.name, u.created_at "
+                "FROM users u LEFT JOIN companies c ON c.id = u.company_id ORDER BY c.name NULLS FIRST, u.created_at"
+            )
         ).fetchall()
-    return pd.DataFrame(rows, columns=["username", "full_name", "role", "created_at"])
+    return pd.DataFrame(rows, columns=["username", "full_name", "role", "company", "created_at"])
 
 
-def save_user(username: str, password_hash: str, full_name: str, role: str):
+def save_user(username: str, password_hash: str, full_name: str, role: str, company_id: int | None = None):
     with get_engine().begin() as conn:
         conn.execute(
             text(
-                "INSERT INTO users (username, password_hash, full_name, role) VALUES (:u, :p, :f, :r) "
-                "ON CONFLICT (username) DO UPDATE SET password_hash = :p, full_name = :f, role = :r"
+                "INSERT INTO users (username, password_hash, full_name, role, company_id) VALUES (:u, :p, :f, :r, :c) "
+                "ON CONFLICT (username) DO UPDATE SET password_hash = :p, full_name = :f, role = :r, company_id = :c"
             ),
-            {"u": username, "p": password_hash, "f": full_name, "r": role},
+            {"u": username, "p": password_hash, "f": full_name, "r": role, "c": company_id},
         )
 
 

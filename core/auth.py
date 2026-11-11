@@ -47,18 +47,22 @@ def validate_new_password(password: str, confirm: str) -> str | None:
     return None
 
 
-def create_user(username: str, password: str, full_name: str = "", role: str = "user") -> None:
+def create_user(username: str, password: str, full_name: str = "", role: str = "user", company_id: int | None = None) -> None:
+    """Administrators are platform-level (no company); every other user belongs to exactly one company."""
     if role not in ROLES:
         raise ValueError(f"Unknown role {role!r}")
     if not _clean(username):
         raise ValueError("Username is required.")
-    db.save_user(_clean(username), hash_password(password), full_name.strip(), role)
+    if role != "admin" and company_id is None:
+        raise ValueError("Choose the company this user belongs to.")
+    db.save_user(_clean(username), hash_password(password), full_name.strip(), role,
+                 None if role == "admin" else company_id)
 
 
 def authenticate(username: str, password: str) -> dict | None:
     user = db.get_user(_clean(username))
     if user and verify_password(password, user["password_hash"]):
-        return {k: user[k] for k in ("username", "full_name", "role")}
+        return {k: user[k] for k in ("username", "full_name", "role", "company_id", "company_name")}
     return None
 
 
@@ -69,6 +73,11 @@ def needs_setup() -> bool:
 
 def current_user() -> dict | None:
     return st.session_state.get(_SESSION_KEY)
+
+
+def is_admin() -> bool:
+    """Platform administrators see the system-level views (companies, skill groups)."""
+    return (current_user() or {}).get("role") == "admin"
 
 
 def sign_in(user: dict) -> None:
